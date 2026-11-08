@@ -1,0 +1,14 @@
+# For the mongodb reset
+
+sudo systemctl stop mongodb
+sudo rm -rf /var/lib/mongodb/*
+sudo chown -R mongodb:mongodb /var/lib/mongodb
+
+free5gc:
+sudo ./run.sh
+
+gNB:
+sudo ./build/nr-gnb -c ./config/free5gc-gnb.yaml
+
+UE:
+sudo ./build/nr-ue -c ./config/free5gc-ue.yaml

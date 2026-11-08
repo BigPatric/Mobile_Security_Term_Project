@@ -1,3 +1,8 @@
 *.DS_store
 *.venv
 __pycache__/
+free5gc/
+UERANISM/
+.vscode/
+bin/
+free5gc/cert/
