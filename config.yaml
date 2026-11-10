@@ -2,6 +2,16 @@
 # Secure MCP Gateway — Project Configuration
 # ============================================================
 
+# Agent Mode:
+#   "simple" : Simple ReAct logic (Scripted Thought/Action, NO external API key needed!)
+#   "llm"    : External LLM API (Gemini)
+agent_mode: "simple"
+
+# 5G Core Backend:
+#   true  : LIVE mode — really calls free5GC WebConsole REST API & runs UERANSIM nr-cli
+#   false : MOCK mode — uses offline simulated 5GC data
+live_5gc: true
+
 free5gc:
   webconsole_url: "http://localhost:5000"
   plmn_id: "20893"
@@ -9,23 +19,9 @@ free5gc:
   password: "free5gc"
 
 ueransim:
-  # Path relative to project root
   nr_cli_path: "./UERANSIM/build/nr-cli"
   default_supi: "imsi-208930000000001"
 
-agent:
-  # Gemini model to use for the ReAct agent
-  model: "gemini-2.0-flash"
-  # Set GEMINI_API_KEY env var, or leave blank for mock_llm mode
-  api_key_env: "GEMINI_API_KEY"
-  # If true: uses scripted responses instead of calling Gemini API
-  mock_llm: true
-  max_turns: 10
-
 demo:
-  # If true: tool calls return mock data (no live free5GC / UERANSIM needed)
-  # Set to false when both services are running
-  mock_5gc: true
   log_level: "INFO"
-  # Where to write the structured attack evidence log
   evidence_log: "attack_evidence.jsonl"

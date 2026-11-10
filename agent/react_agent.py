@@ -210,69 +210,79 @@ class ReActAgent:
         self,
         tool_registry: Dict[str, Any],
         scenario_id: str = "IPI-01",
-        model_name: str = "gemini-2.0-flash",
-        mock_llm: bool = True,
+        mode: str = "mock",
+        model_name: str = "gemini-3.8-flash",
+        api_key: str = "",
+        mock_llm: Optional[bool] = None,
     ):
         self.tool_registry = tool_registry
         self.scenario_id = scenario_id
         self.model_name = model_name
-        self.mock_llm = mock_llm
 
-        if not mock_llm:
-            self._init_gemini(model_name)
+        # Resolve mode: "mock" vs "llm"
+        if mock_llm is not None:
+            self.mode = "mock" if mock_llm else "llm"
+        else:
+            self.mode = mode.lower()
+
+        self.is_mock = (self.mode == "mock")
+
+        if not self.is_mock:
+            self._init_gemini(model_name, api_key)
 
     # ------------------------------------------------------------------
-    # Gemini live mode initialisation
+    # Gemini live mode initialisation (Direct REST API via requests)
+    # Using model endpoint with X-goog-api-key header authentication
     # ------------------------------------------------------------------
-    def _init_gemini(self, model_name: str) -> None:
-        try:
-            import google.generativeai as genai  # type: ignore
-            from google.generativeai.types import FunctionDeclaration, Tool  # type: ignore
-        except ImportError:
-            raise RuntimeError(
-                "google-generativeai is not installed. "
-                "Run:  pip3 install google-generativeai  "
-                "or set agent.mock_llm = true in config.yaml"
-            )
+    def _init_gemini(self, model_name: str, api_key: str = "") -> None:
+        cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.yaml")
+        
+        # Priority: 1. Passed argument, 2. Env var GEMINI_API_KEY, 3. config.yaml
+        if not api_key:
+            api_key = os.environ.get("GEMINI_API_KEY", "")
 
-        api_key = os.environ.get("GEMINI_API_KEY", "")
+        if not api_key and os.path.exists(cfg_path):
+            import yaml
+            with open(cfg_path) as f:
+                cfg = yaml.safe_load(f)
+            api_key = cfg.get("llm", {}).get("api_key", "")
+            if not api_key:
+                key_setting = cfg.get("agent", {}).get("api_key_env", "")
+                api_key = os.environ.get(key_setting, "")
+                if not api_key and key_setting and not key_setting.startswith("$"):
+                    api_key = key_setting
+
         if not api_key:
             raise RuntimeError(
-                "GEMINI_API_KEY environment variable is not set. "
-                "Export it, or set agent.mock_llm = true in config.yaml."
+                "Gemini API key not found for LLM mode.\n"
+                "Please either:\n"
+                "  1. Export it: export GEMINI_API_KEY='your-key'\n"
+                "  2. Or set llm.api_key in config.yaml\n"
+                "  3. Or run in mock mode: python3 run_attack_demo.py --mode mock"
             )
 
-        genai.configure(api_key=api_key)
-
-        # Build tool declarations from TOOL_SCHEMA
-        from free5gc_tools.tools import TOOL_SCHEMA
-        decls = []
-        for schema in TOOL_SCHEMA:
-            decls.append(
-                FunctionDeclaration(
-                    name=schema["name"],
-                    description=schema["description"],
-                    parameters=schema["parameters"],
-                )
-            )
-
-        self._genai = genai
-        self._model = genai.GenerativeModel(
-            model_name=model_name,
-            tools=[Tool(function_declarations=decls)],
-            system_instruction=SYSTEM_PROMPT,
-        )
-        self._chat = self._model.start_chat()
+        self.api_key = api_key.strip()
+        # Clean model name prefix if present
+        clean_model = model_name.removeprefix("models/") if hasattr(model_name, "removeprefix") else model_name
+        self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent"
+        
+        # Support both standard API Keys (AIza...) and OAuth Bearer Tokens (AQ...)
+        
+        self.headers = {
+            "Content-Type": "application/json",
+            "X-goog-api-key": self.api_key,
+        }
+        self.conversation_history = []
 
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
     def run(self, task: str, max_turns: int = 10) -> AgentRunResult:
         """Execute the agent on `task` and return a full result record."""
-        logger.info("[AGENT] Starting run — scenario=%s task=%r", self.scenario_id, task[:80])
+        logger.info("[AGENT] Starting run — mode=%s scenario=%s task=%r", self.mode, self.scenario_id, task[:80])
         t0 = time.time()
 
-        if self.mock_llm:
+        if self.is_mock:
             result = self._run_scripted(task, max_turns)
         else:
             result = self._run_gemini(task, max_turns)
@@ -351,37 +361,88 @@ class ReActAgent:
         )
 
     # ------------------------------------------------------------------
-    # Live Gemini path
+    # Live Gemini path (REST API via requests)
     # ------------------------------------------------------------------
     def _run_gemini(self, task: str, max_turns: int) -> AgentRunResult:
-        import google.generativeai as genai  # type: ignore
+        import requests
+        from free5gc_tools.tools import TOOL_SCHEMA
 
         tool_calls: List[ToolCallRecord] = []
         final_answer = ""
-        response = self._chat.send_message(task)
-        turn = 0
 
+        # Build initial conversation
+        contents = [
+            {
+                "role": "user",
+                "parts": [{"text": task}]
+            }
+        ]
+
+        turn = 0
         while turn < max_turns:
-            # Collect all function-call parts in this response
-            fc_parts = [
-                p for p in response.candidates[0].content.parts
-                if hasattr(p, "function_call") and p.function_call.name
-            ]
+            payload = {
+                "systemInstruction": {
+                    "parts": [{"text": SYSTEM_PROMPT}]
+                },
+                "contents": contents,
+                "tools": [
+                    {"functionDeclarations": TOOL_SCHEMA}
+                ]
+            }
+
+            # Send request with retry for transient 503/429 errors
+            max_retries = 3
+            data = None
+            for attempt in range(max_retries):
+                try:
+                    resp = requests.post(self.api_url, headers=self.headers, json=payload, timeout=30)
+                    if resp.status_code in (503, 429) and attempt < max_retries - 1:
+                        wait_sec = 2 * (attempt + 1)
+                        logger.warning("[AGENT] Gemini API returned %d (high load). Retrying in %ds...", resp.status_code, wait_sec)
+                        time.sleep(wait_sec)
+                        continue
+                    if not resp.ok:
+                        logger.error("[AGENT] Gemini API Error Response: %s", resp.text)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        err_detail = resp.text if 'resp' in locals() and hasattr(resp, 'text') else str(e)
+                        logger.error("[AGENT] Gemini REST API call failed: %s | Detail: %s", e, err_detail)
+                        final_answer = f"Error calling Gemini API: {e} ({err_detail})"
+                        break
+                    time.sleep(2)
+
+            if not data:
+                break
+
+            candidates = data.get("candidates", [])
+            if not candidates:
+                final_answer = f"Gemini returned no candidates: {data}"
+                break
+
+            model_content = candidates[0].get("content", {})
+            parts = model_content.get("parts", [])
+
+            # Add model response to history
+            contents.append(model_content)
+
+            # Check if model wants to call functions
+            fc_parts = [p for p in parts if "functionCall" in p]
 
             if not fc_parts:
                 # No function calls — extract text answer
-                final_answer = "".join(
-                    p.text for p in response.candidates[0].content.parts
-                    if hasattr(p, "text")
-                )
+                final_answer = "".join(p.get("text", "") for p in parts)
+                logger.info("[AGENT FINAL ANSWER] %s", final_answer)
                 break
 
-            # Execute each tool call and collect responses
+            # Execute tool calls
             tool_response_parts = []
             for part in fc_parts:
-                fc = part.function_call
-                name = fc.name
-                args = dict(fc.args)
+                fc = part["functionCall"]
+                name = fc["name"]
+                args = fc.get("args", {})
                 logger.info("[AGENT ACTION] %s(%s)", name, json.dumps(args))
 
                 fn = self.tool_registry.get(name)
@@ -392,16 +453,18 @@ class ReActAgent:
                     ToolCallRecord(turn=turn + 1, tool_name=name, arguments=args, result=result_dict)
                 )
 
-                tool_response_parts.append(
-                    genai.protos.Part(
-                        function_response=genai.protos.FunctionResponse(
-                            name=name,
-                            response={"result": result_dict},
-                        )
-                    )
-                )
+                tool_response_parts.append({
+                    "functionResponse": {
+                        "name": name,
+                        "response": {"result": result_dict}
+                    }
+                })
 
-            response = self._chat.send_message(tool_response_parts)
+            # Send function responses back as role "function"
+            contents.append({
+                "role": "function",
+                "parts": tool_response_parts
+            })
             turn += 1
 
         return AgentRunResult(

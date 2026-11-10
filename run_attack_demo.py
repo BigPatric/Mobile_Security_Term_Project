@@ -2,25 +2,19 @@
 """
 run_attack_demo.py — Baseline Attack Flow Demo
 ===============================================
-Runs the IPI-01 (Indirect Prompt Injection) attack scenario end-to-end
-against an UNPROTECTED agent (no MCP gateway), producing:
+Runs the 5G NOC Agent against attack scenarios.
 
-  1. A colourised live trace of every Thought / Action / Observation
-  2. A structured JSON evidence log  → attack_evidence.jsonl
-  3. A final verdict summary
+Supports exactly 2 modes:
+  1. Mock Mode (default):
+     python3 run_attack_demo.py             # or --mode mock
+     - 100% offline standalone demo
+     - Scripted ReAct thought/action loop (no API key needed)
+     - Mock 5GC / UERANSIM session state
 
-Usage:
-    # Quickstart (mock mode — no free5GC / UERANSIM needed):
-    python3 run_attack_demo.py
-
-    # With a live free5GC + UERANSIM testbed:
-    python3 run_attack_demo.py --live
-
-    # Run a different scenario:
-    python3 run_attack_demo.py --scenario IPI-02
-
-    # Use real Gemini LLM (requires GEMINI_API_KEY env var):
-    python3 run_attack_demo.py --llm
+  2. LLM Imported Mode:
+     python3 run_attack_demo.py --llm       # or --mode llm
+     - Imports and calls real Gemini API (gemini-2.0-flash)
+     - Live reasoning, prompt injection susceptibility, and tool execution
 """
 
 import argparse
@@ -136,7 +130,7 @@ def print_run(result, scenario_meta: dict) -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run an MCP Gateway attack demo scenario.")
+    parser = argparse.ArgumentParser(description="5G NOC Agent Attack Demo.")
     parser.add_argument(
         "--scenario",
         default="IPI-01",
@@ -144,14 +138,14 @@ def main() -> None:
         help="Scenario ID to run (default: IPI-01)",
     )
     parser.add_argument(
-        "--live",
+        "--mock-5gc",
         action="store_true",
-        help="Disable mock_5gc and call real free5GC / UERANSIM APIs",
+        help="Use offline mock 5GC data instead of connecting to live free5GC/UERANSIM",
     )
     parser.add_argument(
         "--llm",
         action="store_true",
-        help="Use real Gemini LLM instead of scripted mock (requires GEMINI_API_KEY)",
+        help="Use real external Gemini LLM instead of simple local agent logic",
     )
     args = parser.parse_args()
 
@@ -163,22 +157,25 @@ def main() -> None:
     setup_logging(cfg.get("demo", {}).get("log_level", "INFO"))
     log = logging.getLogger(__name__)
 
-    # Apply CLI overrides to config (in-memory only)
-    if args.live:
-        cfg["demo"]["mock_5gc"] = False
-        # Monkey-patch the config loader cache
-        import free5gc_tools.tools as tools_mod
-        tools_mod._CFG = cfg
-    if args.llm:
-        cfg["agent"]["mock_llm"] = False
+    # Determine 5GC backend mode
+    is_live_5gc = cfg.get("live_5gc", True)
+    if args.mock_5gc:
+        is_live_5gc = False
+    cfg["live_5gc"] = is_live_5gc
 
-    mock_5gc = cfg.get("demo", {}).get("mock_5gc", True)
-    mock_llm = cfg.get("agent", {}).get("mock_llm", True)
+    # Determine Agent mode: "simple" (default) or "llm"
+    agent_mode = "llm" if args.llm else cfg.get("agent_mode", "simple")
+
+    import free5gc_tools.tools as tools_mod
+    tools_mod._CFG = cfg
+
     evidence_file = cfg.get("demo", {}).get("evidence_log", "attack_evidence.jsonl")
 
     print(BANNER)
-    print(f"  Mode: {'MOCK' if mock_5gc else Fore.RED + 'LIVE — REAL free5GC + UERANSIM' + Style.RESET_ALL}")
-    print(f"  LLM:  {'Scripted mock' if mock_llm else Fore.YELLOW + 'Real Gemini API' + Style.RESET_ALL}")
+    core_label = f"{Fore.GREEN + Style.BRIGHT}LIVE — REAL free5GC + UERANSIM{Style.RESET_ALL}" if is_live_5gc else f"{Fore.YELLOW}MOCK — Offline Simulated Data{Style.RESET_ALL}"
+    agent_label = f"{Fore.YELLOW}Real Gemini API{Style.RESET_ALL}" if agent_mode == "llm" else f"{Fore.CYAN + Style.BRIGHT}Simple Scripted ReAct (No API Key Required){Style.RESET_ALL}"
+    print(f"  5G Core: {core_label}")
+    print(f"  Agent:   {agent_label}")
     print(f"  Scenario: {Fore.CYAN}{args.scenario}{Style.RESET_ALL}\n")
 
     # Load scenario metadata
@@ -205,19 +202,24 @@ def main() -> None:
 
     task = scenario_meta.get("task_given_to_agent", "No task defined for this scenario.")
 
-    # Import tools and agent (after potential mock override)
+    # Import tools and agent
     from free5gc_tools import TOOL_REGISTRY
     from agent import ReActAgent
+
+    model_name = cfg.get("llm", {}).get("model") or cfg.get("agent", {}).get("model", "gemini-2.0-flash")
+    api_key = cfg.get("llm", {}).get("api_key", "")
+    max_turns = cfg.get("llm", {}).get("max_turns") or cfg.get("agent", {}).get("max_turns", 10)
 
     agent = ReActAgent(
         tool_registry=TOOL_REGISTRY,
         scenario_id=args.scenario,
-        model_name=cfg.get("agent", {}).get("model", "gemini-2.0-flash"),
-        mock_llm=mock_llm,
+        mode="mock" if agent_mode == "simple" else "llm",
+        model_name=model_name,
+        api_key=api_key,
     )
 
     print(f"{Fore.WHITE + Style.BRIGHT}▶  Running agent…{Style.RESET_ALL}\n")
-    result = agent.run(task, max_turns=cfg.get("agent", {}).get("max_turns", 10))
+    result = agent.run(task, max_turns=max_turns)
 
     # Display
     print_run(result, scenario_meta)
@@ -228,8 +230,8 @@ def main() -> None:
         "scenario_id": result.scenario_id,
         "scenario_name": scenario_meta.get("scenario_name"),
         "attack_type": scenario_meta.get("attack_type"),
-        "mock_5gc": mock_5gc,
-        "mock_llm": mock_llm,
+        "is_live_5gc": is_live_5gc,
+        "agent_mode": agent_mode,
         "was_attacked": result.was_attacked,
         "duration_sec": result.duration_sec,
         "task": result.task,
