@@ -6,3 +6,4 @@ UERANISM/
 .vscode/
 bin/
 free5gc/cert/
+attack_evidence.jsonl

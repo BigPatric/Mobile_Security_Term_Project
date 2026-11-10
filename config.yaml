@@ -1,0 +1,27 @@
+# ============================================================
+# Secure MCP Gateway — Project Configuration
+# ============================================================
+
+# Agent Mode:
+#   "simple" : Simple ReAct logic (Scripted Thought/Action, NO external API key needed!)
+#   "llm"    : External LLM API (Gemini)
+agent_mode: "simple"
+
+# 5G Core Backend:
+#   true  : LIVE mode — really calls free5GC WebConsole REST API & runs UERANSIM nr-cli
+#   false : MOCK mode — uses offline simulated 5GC data
+live_5gc: true
+
+free5gc:
+  webconsole_url: "http://localhost:5000"
+  plmn_id: "20893"
+  username: "admin"
+  password: "free5gc"
+
+ueransim:
+  nr_cli_path: "./UERANSIM/build/nr-cli"
+  default_supi: "imsi-208930000000001"
+
+demo:
+  log_level: "INFO"
+  evidence_log: "attack_evidence.jsonl"

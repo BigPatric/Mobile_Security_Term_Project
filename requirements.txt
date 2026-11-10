@@ -1,0 +1,5 @@
+# Core dependencies — all available on the target system already
+requests>=2.22.0
+PyYAML>=5.3.1
+colorama>=0.4.3
+# Note: Gemini REST API uses requests directly, no external SDK needed.
