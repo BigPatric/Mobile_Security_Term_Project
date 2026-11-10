@@ -1,0 +1,8 @@
+# Core dependencies — all available on the target system already
+requests>=2.22.0
+PyYAML>=5.3.1
+colorama>=0.4.3
+
+# Optional: needed only when agent.mock_llm = false
+# Install with: pip3 install google-generativeai
+# google-generativeai>=0.8.0
