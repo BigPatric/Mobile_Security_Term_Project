@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-run_attack_demo.py — Baseline Attack Flow Demo
-===============================================
+run_attack_demo.py — Baseline Attack Flow Demo (Live 5GC)
+==========================================================
 Runs the 5G NOC Agent against attack scenarios.
+All tool calls execute live against free5GC WebConsole & UERANSIM.
 
-Supports exactly 2 modes:
-  1. Mock Mode (default):
-     python3 run_attack_demo.py             # or --mode mock
-     - 100% offline standalone demo
-     - Scripted ReAct thought/action loop (no API key needed)
-     - Mock 5GC / UERANSIM session state
+Reasoning Modes:
+  1. Simple Mode (default):
+     python3 run_attack_demo.py
+     - Deterministic ReAct thought/action loop (no API key needed)
+     - Directly calls live free5GC & UERANSIM
 
-  2. LLM Imported Mode:
-     python3 run_attack_demo.py --llm       # or --mode llm
-     - Imports and calls real Gemini API (gemini-2.0-flash)
-     - Live reasoning, prompt injection susceptibility, and tool execution
+  2. LLM Mode:
+     python3 run_attack_demo.py --llm
+     - Calls real Gemini API (gemini-2.0-flash)
+     - Live reasoning, prompt injection susceptibility, and live tool execution
 """
 
 import argparse
@@ -130,17 +130,12 @@ def print_run(result, scenario_meta: dict) -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    parser = argparse.ArgumentParser(description="5G NOC Agent Attack Demo.")
+    parser = argparse.ArgumentParser(description="5G NOC Agent Attack Demo (Live 5GC).")
     parser.add_argument(
         "--scenario",
         default="IPI-01",
         choices=["IPI-01", "IPI-02", "DPI-01", "BENIGN-01"],
         help="Scenario ID to run (default: IPI-01)",
-    )
-    parser.add_argument(
-        "--mock-5gc",
-        action="store_true",
-        help="Use offline mock 5GC data instead of connecting to live free5GC/UERANSIM",
     )
     parser.add_argument(
         "--llm",
@@ -157,12 +152,6 @@ def main() -> None:
     setup_logging(cfg.get("demo", {}).get("log_level", "INFO"))
     log = logging.getLogger(__name__)
 
-    # Determine 5GC backend mode
-    is_live_5gc = cfg.get("live_5gc", True)
-    if args.mock_5gc:
-        is_live_5gc = False
-    cfg["live_5gc"] = is_live_5gc
-
     # Determine Agent mode: "simple" (default) or "llm"
     agent_mode = "llm" if args.llm else cfg.get("agent_mode", "simple")
 
@@ -172,8 +161,8 @@ def main() -> None:
     evidence_file = cfg.get("demo", {}).get("evidence_log", "attack_evidence.jsonl")
 
     print(BANNER)
-    core_label = f"{Fore.GREEN + Style.BRIGHT}LIVE — REAL free5GC + UERANSIM{Style.RESET_ALL}" if is_live_5gc else f"{Fore.YELLOW}MOCK — Offline Simulated Data{Style.RESET_ALL}"
-    agent_label = f"{Fore.YELLOW}Real Gemini API{Style.RESET_ALL}" if agent_mode == "llm" else f"{Fore.CYAN + Style.BRIGHT}Simple Scripted ReAct (No API Key Required){Style.RESET_ALL}"
+    core_label = f"{Fore.GREEN + Style.BRIGHT}LIVE — REAL free5GC + UERANSIM{Style.RESET_ALL}"
+    agent_label = f"{Fore.YELLOW}Real Gemini API{Style.RESET_ALL}" if agent_mode == "llm" else f"{Fore.CYAN + Style.BRIGHT}Deterministic ReAct Baseline{Style.RESET_ALL}"
     print(f"  5G Core: {core_label}")
     print(f"  Agent:   {agent_label}")
     print(f"  Scenario: {Fore.CYAN}{args.scenario}{Style.RESET_ALL}\n")
@@ -213,7 +202,7 @@ def main() -> None:
     agent = ReActAgent(
         tool_registry=TOOL_REGISTRY,
         scenario_id=args.scenario,
-        mode="mock" if agent_mode == "simple" else "llm",
+        mode=agent_mode,
         model_name=model_name,
         api_key=api_key,
     )
@@ -230,7 +219,7 @@ def main() -> None:
         "scenario_id": result.scenario_id,
         "scenario_name": scenario_meta.get("scenario_name"),
         "attack_type": scenario_meta.get("attack_type"),
-        "is_live_5gc": is_live_5gc,
+        "is_live_5gc": True,
         "agent_mode": agent_mode,
         "was_attacked": result.was_attacked,
         "duration_sec": result.duration_sec,

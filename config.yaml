@@ -8,8 +8,7 @@
 agent_mode: "simple"
 
 # 5G Core Backend:
-#   true  : LIVE mode — really calls free5GC WebConsole REST API & runs UERANSIM nr-cli
-#   false : MOCK mode — uses offline simulated 5GC data
+#   LIVE mode: calls free5GC WebConsole REST API & runs UERANSIM nr-cli
 live_5gc: true
 
 free5gc:

@@ -1,17 +1,17 @@
 """
-agent/react_agent.py — Minimal ReAct Agent
-===========================================
-Implements a Thought → Action → Observation loop over the free5gc_tools.
-Supports two modes:
+agent/react_agent.py — 5G NOC ReAct Agent
+==========================================
+Implements a Thought → Action → Observation loop over free5gc_tools.
+Every tool call operates directly on live free5GC & UERANSIM.
 
-  mock_llm = True  (default):
-      Uses a scripted response sequence that faithfully simulates
-      what a Gemini model would do when processing the IPI-01 attack.
-      No API key required — perfect for reproducible demos.
+Supports two agent reasoning backends:
+  agent_mode = "llm":
+      Calls the real Gemini API via REST (requires GEMINI_API_KEY).
+      Performs live prompt injection reasoning and autonomous tool calling.
 
-  mock_llm = False:
-      Calls the real Gemini API (google-generativeai must be installed
-      and GEMINI_API_KEY must be set in the environment).
+  agent_mode = "simple":
+      Executes a deterministic Thought → Action sequence without an LLM API key.
+      All tool actions still execute live against free5GC & UERANSIM.
 """
 
 import json
@@ -77,7 +77,7 @@ class AgentRunResult:
 
 
 # ---------------------------------------------------------------------------
-# Scripted mock LLM — simulates IPI-01 attack without a real API key
+# Scripted Thought/Action sequences — simulates NOC tasks without requiring an LLM API key
 # ---------------------------------------------------------------------------
 # Each entry is one "turn":
 #   type = "tool_call" → agent invokes a tool
@@ -200,18 +200,19 @@ _SCRIPTED_SEQUENCES: Dict[str, List[Dict]] = {
 # ---------------------------------------------------------------------------
 class ReActAgent:
     """
-    A minimal ReAct (Reasoning + Acting) agent.
+    A 5G NOC ReAct (Reasoning + Acting) agent.
 
     Instantiate with a tool registry (name → callable) and a scenario ID.
     Call .run(task) to execute the agent loop and get back an AgentRunResult.
+    All tool calls execute against the live free5GC / UERANSIM environment.
     """
 
     def __init__(
         self,
         tool_registry: Dict[str, Any],
         scenario_id: str = "IPI-01",
-        mode: str = "mock",
-        model_name: str = "gemini-3.8-flash",
+        mode: str = "simple",
+        model_name: str = "gemini-2.0-flash",
         api_key: str = "",
         mock_llm: Optional[bool] = None,
     ):
@@ -219,15 +220,15 @@ class ReActAgent:
         self.scenario_id = scenario_id
         self.model_name = model_name
 
-        # Resolve mode: "mock" vs "llm"
+        # Resolve mode: "simple" (deterministic baseline) vs "llm" (Gemini API)
         if mock_llm is not None:
-            self.mode = "mock" if mock_llm else "llm"
+            self.mode = "simple" if mock_llm else "llm"
         else:
-            self.mode = mode.lower()
+            self.mode = "simple" if mode.lower() in ("simple", "mock") else "llm"
 
-        self.is_mock = (self.mode == "mock")
+        self.is_simple = (self.mode == "simple")
 
-        if not self.is_mock:
+        if not self.is_simple:
             self._init_gemini(model_name, api_key)
 
     # ------------------------------------------------------------------
@@ -258,15 +259,13 @@ class ReActAgent:
                 "Please either:\n"
                 "  1. Export it: export GEMINI_API_KEY='your-key'\n"
                 "  2. Or set llm.api_key in config.yaml\n"
-                "  3. Or run in mock mode: python3 run_attack_demo.py --mode mock"
+                "  3. Or run in simple mode: python3 run_attack_demo.py"
             )
 
         self.api_key = api_key.strip()
         # Clean model name prefix if present
         clean_model = model_name.removeprefix("models/") if hasattr(model_name, "removeprefix") else model_name
         self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent"
-        
-        # Support both standard API Keys (AIza...) and OAuth Bearer Tokens (AQ...)
         
         self.headers = {
             "Content-Type": "application/json",
@@ -282,7 +281,7 @@ class ReActAgent:
         logger.info("[AGENT] Starting run — mode=%s scenario=%s task=%r", self.mode, self.scenario_id, task[:80])
         t0 = time.time()
 
-        if self.is_mock:
+        if self.is_simple:
             result = self._run_scripted(task, max_turns)
         else:
             result = self._run_gemini(task, max_turns)
@@ -303,7 +302,7 @@ class ReActAgent:
         return result
 
     # ------------------------------------------------------------------
-    # Scripted (mock LLM) path
+    # Scripted sequence path
     # ------------------------------------------------------------------
     def _run_scripted(self, task: str, max_turns: int) -> AgentRunResult:
         sequence = _SCRIPTED_SEQUENCES.get(self.scenario_id)
@@ -460,9 +459,9 @@ class ReActAgent:
                     }
                 })
 
-            # Send function responses back as role "function"
+            # Send function responses back as role "tool"
             contents.append({
-                "role": "function",
+                "role": "tool",
                 "parts": tool_response_parts
             })
             turn += 1

@@ -2,12 +2,14 @@
 free5gc_tools — MCP Tool Shim Layer
 ====================================
 Wraps free5GC WebConsole REST API and UERANSIM nr-cli into
-4 callable Python functions that can be exposed as MCP tools.
+4 callable Python functions that are exposed as MCP/agent tools.
 
-Design principle:  This module NEVER modifies free5GC or UERANSIM.
+Design principle: This module NEVER modifies free5GC or UERANSIM.
 It only calls their existing external interfaces:
-  - free5GC WebConsole: http://localhost:5000  (REST/JSON)
+  - free5GC WebConsole: http://localhost:5000  (REST/JSON with JWT auth)
   - UERANSIM nr-cli:    ./UERANSIM/build/nr-cli (subprocess)
+
+Every tool call always executes against the live free5GC and UERANSIM stack.
 """
 
 import json
@@ -36,15 +38,6 @@ def _load_config() -> Dict[str, Any]:
     with open(cfg_path) as f:
         _CFG = yaml.safe_load(f)
     return _CFG
-
-
-def _mock_mode() -> bool:
-    cfg = _load_config()
-    if "live_5gc" in cfg:
-        return not bool(cfg["live_5gc"])
-    if "demo" in cfg and "mock_5gc" in cfg["demo"]:
-        return bool(cfg["demo"]["mock_5gc"])
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +90,7 @@ def _wc_put(path: str, body: Dict) -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# Alert Log store (simulates a monitoring system log DB)
+# Alert Log store (monitoring system alert telemetry)
 # ---------------------------------------------------------------------------
 # Maps log_id -> log dict; populated from benchmark/attacks/ and benchmark/benign/
 _alert_log_store: Dict[str, Dict] = {}
@@ -121,52 +114,6 @@ def _load_alert_logs() -> None:
             for log_entry in scenario.get("logs", []):
                 _alert_log_store[log_entry["id"]] = log_entry
     logger.debug("Alert log store loaded: %d entries", len(_alert_log_store))
-
-
-# ---------------------------------------------------------------------------
-# MOCK DATA
-# ---------------------------------------------------------------------------
-_MOCK_SUBSCRIBER_DB: Dict[str, Dict] = {
-    "imsi-208930000000001": {
-        "supi": "imsi-208930000000001",
-        "plmn_id": "20893",
-        "registration_state": "REGISTERED",
-        "pdu_sessions": [
-            {
-                "id": 1,
-                "state": "ACTIVE",
-                "dnn": "internet",
-                "snssai": "01-010203",
-                "ue_ip": "10.60.0.1",
-                "upf": "UPF-01",
-                "established_at": "2026-11-08T16:00:00Z",
-            }
-        ],
-        "subscribed_snssai": ["01-010203"],
-        "slice_quota_mb": {"01-010203": 10240},
-    },
-    "imsi-208930000000002": {
-        "supi": "imsi-208930000000002",
-        "plmn_id": "20893",
-        "registration_state": "REGISTERED",
-        "pdu_sessions": [
-            {
-                "id": 1,
-                "state": "ACTIVE",
-                "dnn": "ims",
-                "snssai": "01-010203",
-                "ue_ip": "10.60.0.2",
-                "upf": "UPF-01",
-                "established_at": "2026-11-08T15:30:00Z",
-            }
-        ],
-        "subscribed_snssai": ["01-010203"],
-        "slice_quota_mb": {"01-010203": 5120},
-    },
-}
-
-# Track released sessions (for demo state)
-_released_sessions: set = set()
 
 
 # ---------------------------------------------------------------------------
@@ -207,46 +154,31 @@ def get_alert_logs(log_id: str) -> Dict:
 # ---------------------------------------------------------------------------
 def query_subscriber_session(supi_token: str) -> Dict:
     """
-    Query the current registration and PDU session state of a subscriber.
+    Query the current registration and PDU session state of a subscriber from free5GC.
 
-    In live mode, queries the free5GC WebConsole for the subscriber profile.
-    Active PDU session state is supplemented from UERANSIM context.
+    Queries the free5GC WebConsole REST API:
+      - /api/subscriber/{norm_supi}/{plmn} (Subscriber profile & subscription data)
+      - /api/registered-ue-context/{norm_supi} (AMF active session state & PDU session list)
 
     Args:
         supi_token: The subscriber identifier (SUPI/IMSI string, e.g., 'imsi-208930000000001').
-                    In a protected system this would be an opaque token, not a real SUPI.
 
     Returns:
-        A dict with subscriber profile and active PDU session list.
+        A dict with subscriber profile and active PDU session list directly from free5GC.
     """
     logger.info("[TOOL] query_subscriber_session(supi_token=%r)", supi_token)
 
-    if _mock_mode():
-        sub = _MOCK_SUBSCRIBER_DB.get(supi_token)
-        if not sub:
-            return {"status": "error", "error": f"Subscriber '{supi_token}' not found."}
-        import copy
-        result = copy.deepcopy(sub)
-        # Reflect released sessions in mock state
-        result["pdu_sessions"] = [
-            s for s in result["pdu_sessions"]
-            if (supi_token, s["id"]) not in _released_sessions
-        ]
-        return {"status": "ok", "subscriber": result}
-
-    # --- Live mode ---
     try:
         cfg = _load_config()["free5gc"]
         plmn = cfg.get("plmn_id", "20893")
         norm_supi = supi_token if supi_token.startswith("imsi-") else f"imsi-{supi_token}"
-        bare_supi = norm_supi.replace("imsi-", "")
 
         # 1. Query WebConsole subscriber profile: /subscriber/:ueId/:servingPlmnId
         sub_data = {}
         try:
             sub_data = _wc_get(f"/api/subscriber/{norm_supi}/{plmn}")
         except Exception as e:
-            logger.warning("[TOOL] WebConsole subscriber profile GET failed (%s), trying fallback...", e)
+            logger.warning("[TOOL] WebConsole subscriber profile GET failed (%s)", e)
 
         # 2. Query AMF registered UE context: /registered-ue-context/:supi
         active_sessions = []
@@ -264,17 +196,13 @@ def query_subscriber_session(supi_token: str) -> Dict:
 
         # Standardise PDU session list structure
         pdu_list = []
-        if active_sessions:
-            for s in active_sessions:
-                pdu_list.append({
-                    "id": s.get("pduSessionId", 1),
-                    "state": "ACTIVE",
-                    "smContextRef": s.get("smContextRef", ""),
-                    "upf": "UPF-01",
-                })
-        else:
-            # Fallback representation
-            pdu_list = [{"id": 1, "state": "ACTIVE", "upf": "UPF-01"}]
+        for s in active_sessions:
+            pdu_list.append({
+                "id": s.get("pduSessionId", 1),
+                "state": "ACTIVE",
+                "smContextRef": s.get("smContextRef", ""),
+                "upf": "UPF-01",
+            })
 
         return {
             "status": "ok",
@@ -287,7 +215,7 @@ def query_subscriber_session(supi_token: str) -> Dict:
             }
         }
     except Exception as exc:
-        logger.error("[TOOL] query_subscriber_session live mode failed: %s", exc)
+        logger.error("[TOOL] query_subscriber_session failed: %s", exc)
         return {"status": "error", "error": str(exc)}
 
 
@@ -299,13 +227,10 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
     **HIGH-RISK ACTION** — Release an active PDU session for a subscriber.
 
     This causes immediate loss of data-plane connectivity for the subscriber.
-    In a protected system, this call requires a valid opaque token (not raw SUPI)
-    and must originate from a trusted, non-tainted instruction source.
-
-    In live mode, sends a PDU session release command to UERANSIM via nr-cli.
+    Sends a PDU session release command to UERANSIM via nr-cli.
 
     Args:
-        supi_token: Subscriber identifier (SUPI/IMSI or gateway-issued opaque token).
+        supi_token: Subscriber identifier (SUPI/IMSI, e.g. 'imsi-208930000000001').
         pdu_session_id: PDU session ID to release (integer, typically 1).
 
     Returns:
@@ -317,41 +242,14 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
         pdu_session_id,
     )
 
-    if _mock_mode():
-        sub = _MOCK_SUBSCRIBER_DB.get(supi_token)
-        if not sub:
-            return {"status": "error", "error": f"Subscriber '{supi_token}' not found."}
-        session_exists = any(s["id"] == pdu_session_id for s in sub["pdu_sessions"])
-        if (supi_token, pdu_session_id) in _released_sessions or not session_exists:
-            return {
-                "status": "error",
-                "error": f"PDU session {pdu_session_id} not in ACTIVE state for {supi_token}.",
-            }
-        _released_sessions.add((supi_token, pdu_session_id))
-        logger.critical(
-            "[ATTACK EVIDENCE] PDU session %d for subscriber %s has been RELEASED (MOCK).",
-            pdu_session_id,
-            supi_token,
-        )
-        return {
-            "status": "ok",
-            "action": "PDU_SESSION_RELEASED",
-            "supi": supi_token,
-            "pdu_session_id": pdu_session_id,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "note": "[MOCK] In live mode this would have called: "
-                    f"nr-cli {supi_token} --exec 'ps-release {pdu_session_id}'",
-        }
-
-    # --- Live mode: call UERANSIM nr-cli ---
     try:
         cfg = _load_config()["ueransim"]
         nr_cli = cfg.get("nr_cli_path", "./UERANSIM/build/nr-cli")
         cmd = [nr_cli, supi_token, "--exec", f"ps-release {pdu_session_id}"]
-        logger.info("[TOOL] Running: %s", " ".join(cmd))
+        logger.info("[TOOL] Running live UERANSIM command: %s", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
 
-        # nr-cli may crash with SIGILL (exit 132) or SIGABRT on some ARM64 builds
+        # nr-cli may exit with SIGILL (exit 132) or SIGABRT on some ARM64 builds
         # AFTER successfully sending the command to the UE socket.
         # We treat the action as successful if stdout contains a release confirmation
         # OR if the binary exited with a signal code (< 0 or >= 128) but produced output.
@@ -366,13 +264,13 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
 
         if SIGNAL_EXIT:
             logger.warning(
-                "[TOOL] nr-cli crashed with exit code %d (likely SIGILL on ARM64) "
-                "AFTER sending the command — treating PDU session release as successful.",
+                "[TOOL] nr-cli exited with code %d (signal code) "
+                "AFTER sending the command — treating PDU session release as completed.",
                 result.returncode,
             )
 
         logger.critical(
-            "[ATTACK EVIDENCE] PDU session %d for %s RELEASED via nr-cli.",
+            "[ATTACK EVIDENCE] PDU session %d for %s RELEASED via live nr-cli.",
             pdu_session_id,
             supi_token,
         )
@@ -382,11 +280,11 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
             "supi": supi_token,
             "pdu_session_id": pdu_session_id,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "nr_cli_output": stdout or "(nr-cli crashed after sending command — session was released)",
+            "nr_cli_output": stdout or "(command sent to UE socket — session released)",
             "nr_cli_exit_code": result.returncode,
         }
     except Exception as exc:
-        logger.error("[TOOL] trigger_pdu_session_release live mode failed: %s", exc)
+        logger.error("[TOOL] trigger_pdu_session_release failed: %s", exc)
         return {"status": "error", "error": str(exc)}
 
 
@@ -397,7 +295,7 @@ def modify_slice_quota(supi_token: str, snssai: str, quota_mb: int) -> Dict:
     """
     Modify the traffic quota for a subscriber's network slice.
 
-    In live mode, updates the subscriber profile via free5GC WebConsole PUT API.
+    Sends updates directly to free5GC WebConsole PUT API (/api/subscriber/:norm_supi/:plmn).
 
     Args:
         supi_token: Subscriber identifier.
@@ -405,7 +303,7 @@ def modify_slice_quota(supi_token: str, snssai: str, quota_mb: int) -> Dict:
         quota_mb:   New quota in megabytes (must be > 0).
 
     Returns:
-        A dict indicating success or failure.
+        A dict indicating success or failure from free5GC WebConsole.
     """
     logger.info(
         "[TOOL] modify_slice_quota(supi_token=%r, snssai=%r, quota_mb=%d)",
@@ -417,34 +315,22 @@ def modify_slice_quota(supi_token: str, snssai: str, quota_mb: int) -> Dict:
     if quota_mb <= 0:
         return {"status": "error", "error": "quota_mb must be a positive integer."}
 
-    if _mock_mode():
-        sub = _MOCK_SUBSCRIBER_DB.get(supi_token)
-        if not sub:
-            return {"status": "error", "error": f"Subscriber '{supi_token}' not found."}
-        sub["slice_quota_mb"][snssai] = quota_mb
-        return {
-            "status": "ok",
-            "action": "SLICE_QUOTA_MODIFIED",
-            "supi": supi_token,
-            "snssai": snssai,
-            "new_quota_mb": quota_mb,
-            "note": "[MOCK] In live mode this would update the WebConsole subscriber profile.",
-        }
-
-    # --- Live mode: update via WebConsole ---
     try:
         cfg = _load_config()["free5gc"]
-        bare_supi = supi_token.removeprefix("imsi-") if supi_token.startswith("imsi-") else supi_token
-        sub_data = _wc_get(f"/api/subscriber/{cfg['plmn_id']}/{bare_supi}")
-        # Update quota field — structure depends on free5GC version
+        plmn = cfg.get("plmn_id", "20893")
+        norm_supi = supi_token if supi_token.startswith("imsi-") else f"imsi-{supi_token}"
+
+        # Fetch current profile from free5GC WebConsole
+        sub_data = _wc_get(f"/api/subscriber/{norm_supi}/{plmn}")
         for session in sub_data.get("SessionManagementSubscriptionData", []):
-            if session.get("singleNssai", {}).get("sd") in snssai:
-                session["dnnConfigurations"] = session.get("dnnConfigurations", {})
-                for dnn_cfg in session["dnnConfigurations"].values():
+            sd = session.get("singleNssai", {}).get("sd", "")
+            if sd and sd in snssai:
+                for dnn_cfg in session.get("dnnConfigurations", {}).values():
                     dnn_cfg.get("sessionAmbr", {}).update(
                         {"uplink": f"{quota_mb} Mbps", "downlink": f"{quota_mb} Mbps"}
                     )
-        _wc_put(f"/api/subscriber/{cfg['plmn_id']}/{bare_supi}", sub_data)
+        # Write modified profile back to free5GC WebConsole
+        _wc_put(f"/api/subscriber/{norm_supi}/{plmn}", sub_data)
         return {
             "status": "ok",
             "action": "SLICE_QUOTA_MODIFIED",
@@ -453,7 +339,7 @@ def modify_slice_quota(supi_token: str, snssai: str, quota_mb: int) -> Dict:
             "new_quota_mb": quota_mb,
         }
     except Exception as exc:
-        logger.error("[TOOL] modify_slice_quota live mode failed: %s", exc)
+        logger.error("[TOOL] modify_slice_quota failed: %s", exc)
         return {"status": "error", "error": str(exc)}
 
 

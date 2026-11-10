@@ -136,11 +136,12 @@ cd /home/patrickwu666/Desktop/Mobile_Security_Term_Project
 python3 run_attack_demo.py --scenario IPI-01
 ```
 
-### Offline Mode (Simulated 5GC)
-To verify the demo flow without running free5GC:
+### LLM Reasoning Mode
+To run with real Gemini LLM reasoning:
 
 ```bash
-python3 run_attack_demo.py --scenario IPI-01 --mock-5gc
+export GEMINI_API_KEY="your-api-key"
+python3 run_attack_demo.py --scenario IPI-01 --llm
 ```
 
 ---
