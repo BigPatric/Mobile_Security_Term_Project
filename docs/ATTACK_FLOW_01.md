@@ -192,7 +192,7 @@ transition; with no session it honestly prints **AGENT HIJACKED, NO REAL IMPACT*
 
 ---
 
-## 10. Benchmark Scenarios Summary
+## 9. Benchmark Scenarios Summary
 
 | Scenario ID | Attack Type | Key Action |
 |---|---|---|
@@ -203,7 +203,7 @@ transition; with no session it honestly prints **AGENT HIJACKED, NO REAL IMPACT*
 
 ---
 
-## 11. References
+## 10. References
 
 - **Greshake et al. (2023)**: *Not what you've signed up for: Compromising real-world LLM-integrated applications with indirect prompt injection* (arXiv:2302.12173)
 - **Debenedetti et al. (2025)**: *CaMeL: Defeating Prompt Injections by Design* (arXiv:2503.18813)
