@@ -12,3 +12,9 @@ sudo ./build/nr-gnb -c ./config/free5gc-gnb.yaml
 
 UE:
 sudo ./build/nr-ue -c ./config/free5gc-ue.yaml
+
+
+Remember to refresh
+
+sudo ./force_kill.sh
+sudo killall -9 nr-gnb nr-ue 2>/dev/null
