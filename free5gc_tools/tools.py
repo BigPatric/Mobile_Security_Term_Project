@@ -66,10 +66,19 @@ def _get_webconsole_token() -> str:
     return _wc_token
 
 
-def _wc_get(path: str) -> Dict:
+def _wc_headers() -> Dict[str, str]:
+    """Return auth headers required by free5GC WebConsole (both Token and Bearer)."""
+    token = _get_webconsole_token()
+    return {
+        "Token": token,
+        "Authorization": f"Bearer {token}",
+    }
+
+
+def _wc_get(path: str) -> Any:
     """GET from free5GC WebConsole with auth."""
     cfg = _load_config()["free5gc"]
-    headers = {"Authorization": f"Bearer {_get_webconsole_token()}"}
+    headers = _wc_headers()
     resp = requests.get(f"{cfg['webconsole_url']}{path}", headers=headers, timeout=5)
     resp.raise_for_status()
     return resp.json()
@@ -78,10 +87,8 @@ def _wc_get(path: str) -> Dict:
 def _wc_put(path: str, body: Dict) -> Dict:
     """PUT to free5GC WebConsole with auth."""
     cfg = _load_config()["free5gc"]
-    headers = {
-        "Authorization": f"Bearer {_get_webconsole_token()}",
-        "Content-Type": "application/json",
-    }
+    headers = _wc_headers()
+    headers["Content-Type"] = "application/json"
     resp = requests.put(
         f"{cfg['webconsole_url']}{path}", headers=headers, json=body, timeout=5
     )
@@ -180,9 +187,16 @@ def query_subscriber_session(supi_token: str) -> Dict:
         except Exception as e:
             logger.warning("[TOOL] WebConsole subscriber profile GET failed (%s)", e)
 
+        if not sub_data:
+            return {
+                "status": "error",
+                "source": "free5GC WebConsole REST API",
+                "error": f"Subscriber '{norm_supi}' not found in free5GC profile database (PLMN {plmn}).",
+            }
+
         # 2. Query AMF registered UE context: /registered-ue-context/:supi
         active_sessions = []
-        conn_state = "REGISTERED"
+        conn_state = "PROVISIONED"
         try:
             ue_ctx = _wc_get(f"/api/registered-ue-context/{norm_supi}")
             if ue_ctx and isinstance(ue_ctx, dict):
@@ -192,7 +206,7 @@ def query_subscriber_session(supi_token: str) -> Dict:
                 active_sessions = ue_ctx[0].get("pduSessionList", [])
                 conn_state = ue_ctx[0].get("connectionState", "CONNECTED")
         except Exception as e:
-            logger.warning("[TOOL] WebConsole registered-ue-context GET note: %s", e)
+            logger.info("[TOOL] WebConsole registered-ue-context note: %s", e)
 
         # Standardise PDU session list structure
         pdu_list = []
@@ -204,12 +218,46 @@ def query_subscriber_session(supi_token: str) -> Dict:
                 "upf": "UPF-01",
             })
 
+        # Extract structured details directly from free5GC profile response
+        am_data = sub_data.get("AccessAndMobilitySubscriptionData", {})
+        ue_ambr = am_data.get("subscribedUeAmbr", {})
+        nssai = am_data.get("nssai", {})
+        default_slices = [
+            f"{s.get('sst', 1):02d}-{s.get('sd', '')}"
+            for s in nssai.get("defaultSingleNssais", [])
+        ]
+        all_slices = [
+            f"{s.get('sst', 1):02d}-{s.get('sd', '')}"
+            for s in nssai.get("singleNssais", [])
+        ]
+
+        # Extract Session Management Configurations
+        sm_configs = []
+        for sm_item in sub_data.get("SessionManagementSubscriptionData", []):
+            snssai_info = sm_item.get("singleNssai", {})
+            snssai_key = f"{snssai_info.get('sst', 1):02d}-{snssai_info.get('sd', '')}"
+            dnn_map = {}
+            for dnn_name, dnn_cfg in sm_item.get("dnnConfigurations", {}).items():
+                dnn_map[dnn_name] = {
+                    "session_ambr": dnn_cfg.get("sessionAmbr", {}),
+                    "5qi": dnn_cfg.get("5gQosProfile", {}).get("5qi"),
+                }
+            sm_configs.append({
+                "snssai": snssai_key,
+                "dnn_configurations": dnn_map,
+            })
+
         return {
             "status": "ok",
+            "source": "free5GC WebConsole REST API",
             "subscriber": {
                 "supi": norm_supi,
                 "plmn_id": plmn,
                 "registration_state": conn_state,
+                "subscribed_ambr": ue_ambr,
+                "default_slices": default_slices,
+                "all_slices": all_slices,
+                "session_configs": sm_configs,
                 "pdu_sessions": pdu_list,
                 "raw_profile": sub_data,
             }
@@ -260,7 +308,13 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
 
         if MEANINGFUL_ERROR:
             logger.error("[TOOL] nr-cli exited with code %d: %s", result.returncode, stderr)
-            return {"status": "error", "error": stderr or f"nr-cli exit code {result.returncode}"}
+            return {
+                "status": "error",
+                "action": "PDU_SESSION_RELEASE",
+                "supi": supi_token,
+                "pdu_session_id": pdu_session_id,
+                "error": stderr or f"nr-cli exit code {result.returncode}",
+            }
 
         if SIGNAL_EXIT:
             logger.warning(
@@ -322,24 +376,56 @@ def modify_slice_quota(supi_token: str, snssai: str, quota_mb: int) -> Dict:
 
         # Fetch current profile from free5GC WebConsole
         sub_data = _wc_get(f"/api/subscriber/{norm_supi}/{plmn}")
+        raw_sd = snssai.replace("-", "")
+        sd_match = raw_sd[2:] if raw_sd.startswith("01") and len(raw_sd) > 2 else raw_sd
+        modified = False
         for session in sub_data.get("SessionManagementSubscriptionData", []):
             sd = session.get("singleNssai", {}).get("sd", "")
-            if sd and sd in snssai:
+            if (sd and sd in snssai) or (sd and sd == sd_match):
                 for dnn_cfg in session.get("dnnConfigurations", {}).values():
-                    dnn_cfg.get("sessionAmbr", {}).update(
-                        {"uplink": f"{quota_mb} Mbps", "downlink": f"{quota_mb} Mbps"}
-                    )
+                    dnn_cfg.setdefault("sessionAmbr", {})
+                    dnn_cfg["sessionAmbr"]["uplink"] = f"{quota_mb} Mbps"
+                    dnn_cfg["sessionAmbr"]["downlink"] = f"{quota_mb} Mbps"
+                    modified = True
+
         # Write modified profile back to free5GC WebConsole
         _wc_put(f"/api/subscriber/{norm_supi}/{plmn}", sub_data)
         return {
             "status": "ok",
+            "source": "free5GC WebConsole REST API",
             "action": "SLICE_QUOTA_MODIFIED",
-            "supi": supi_token,
+            "supi": norm_supi,
             "snssai": snssai,
             "new_quota_mb": quota_mb,
+            "applied_to_5gc": True,
         }
     except Exception as exc:
         logger.error("[TOOL] modify_slice_quota failed: %s", exc)
+        return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Tool 5 — list_subscribers
+# ---------------------------------------------------------------------------
+def list_subscribers() -> Dict:
+    """
+    List all subscribers currently provisioned in free5GC Core.
+
+    Returns:
+        A dict with the list of subscribers directly from free5GC WebConsole.
+    """
+    logger.info("[TOOL] list_subscribers()")
+    try:
+        data = _wc_get("/api/subscriber")
+        subs = data if isinstance(data, list) else []
+        return {
+            "status": "ok",
+            "source": "free5GC WebConsole REST API",
+            "count": len(subs),
+            "subscribers": subs,
+        }
+    except Exception as exc:
+        logger.error("[TOOL] list_subscribers failed: %s", exc)
         return {"status": "error", "error": str(exc)}
 
 
@@ -351,6 +437,7 @@ TOOL_REGISTRY = {
     "query_subscriber_session": query_subscriber_session,
     "trigger_pdu_session_release": trigger_pdu_session_release,
     "modify_slice_quota": modify_slice_quota,
+    "list_subscribers": list_subscribers,
 }
 
 # Gemini-compatible function declaration schemas
@@ -434,6 +521,15 @@ TOOL_SCHEMA = [
                 },
             },
             "required": ["supi_token", "snssai", "quota_mb"],
+        },
+    },
+    {
+        "name": "list_subscribers",
+        "description": "List all provisioned subscribers in free5GC Core.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
         },
     },
 ]

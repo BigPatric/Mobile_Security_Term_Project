@@ -59,7 +59,7 @@ class WebConsoleClient:
             return False
 
     def _get(self, path: str):
-        headers = {"Authorization": f"Bearer {self._token}"}
+        headers = {"Token": self._token, "Authorization": f"Bearer {self._token}"}
         r = requests.get(f"{BASE_URL}/api{path}", headers=headers, timeout=5)
         r.raise_for_status()
         return r.json()
