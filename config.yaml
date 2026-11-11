@@ -21,6 +21,13 @@ ueransim:
   nr_cli_path: "./UERANSIM/build/nr-cli"
   default_supi: "imsi-208930000000001"
 
+# SMF service-based interface (Nsmf_PDUSession).
+# Used for NETWORK-INITIATED PDU session release: the attack calls the core's
+# own ReleaseSMContext API so the SMF/UPF tear the session down. The UE is not
+# driven to release itself. Matches smfcfg.yaml sbi (scheme/registerIPv4/port).
+smf:
+  sbi_url: "http://127.0.0.2:8000"
+
 demo:
   log_level: "INFO"
   evidence_log: "attack_evidence.jsonl"

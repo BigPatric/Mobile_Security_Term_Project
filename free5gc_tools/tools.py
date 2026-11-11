@@ -1,19 +1,23 @@
 """
 free5gc_tools — MCP Tool Shim Layer (REAL, verified)
 ====================================================
-Wraps free5GC WebConsole REST API and UERANSIM nr-cli into callable
-agent tools. Every tool reflects the LIVE state of the 5G core and
-verifies state-changing actions against ground truth.
+Wraps free5GC's own service-based interfaces into callable agent tools.
+Every tool reflects the LIVE state of the 5G core and verifies
+state-changing actions against ground truth.
 
 Design principles:
   - This module NEVER modifies free5GC/UERANSIM source; it only calls
-    their existing external interfaces (WebConsole REST, nr-cli).
+    their existing external interfaces: the WebConsole REST API, the SMF
+    Nsmf_PDUSession SBI, and UERANSIM nr-cli (read-only, for verification).
+  - State-changing actions go through the CORE's own APIs. A PDU session
+    release invokes the SMF ReleaseSMContext operation (network-initiated);
+    it does not drive the UE to release itself.
   - It NEVER fabricates state. If the core is off or the UE is not
     registered, the tool says so — it does not report a fake ACTIVE
     session or a fake success.
-  - A state-changing action (PDU session release) is only reported as
-    successful if an INDEPENDENT post-condition probe confirms the real
-    5GC state actually changed (session was ACTIVE before, GONE after).
+  - A state-changing action is only reported as successful if an
+    INDEPENDENT post-condition probe confirms the real 5GC state actually
+    changed (session was ACTIVE before, GONE after).
 
 All ground-truth access lives in free5gc_tools.core_state.
 """
@@ -168,12 +172,17 @@ def query_subscriber_session(supi_token: str) -> Dict:
 # ---------------------------------------------------------------------------
 def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
     """
-    **HIGH-RISK** — Release an active PDU session for a subscriber via nr-cli.
+    **HIGH-RISK** — Release an active PDU session by invoking the free5GC core's
+    own Nsmf_PDUSession ReleaseSMContext API (network-initiated release).
 
+    The core terminates the session; the UE is NOT driven to release itself.
     Verified end to end:
-      pre-check  : the session must be genuinely ACTIVE (nr-cli ps-list).
-      action     : nr-cli <supi> --exec 'ps-release <psi>'  (stdout checked for errors).
-      post-check : the session must actually be GONE afterwards.
+      pre-check  : the AMF must register an ACTIVE PDU session with this id and
+                   expose its SM-context reference.
+      action     : POST .../nsmf-pdusession/v1/sm-contexts/{ref}/release on the SMF
+                   → the SMF deletes the UPF N4 session and signals the UE.
+      post-check : the session must actually be GONE afterwards — confirmed by the
+                   AMF (control plane) and/or the UE tunnel vanishing (data plane).
 
     Returns status "ok" with verified=True ONLY if the real 5GC state changed.
     If there was no live session to begin with (core off / UE not attached),
@@ -184,17 +193,27 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
     psi = int(pdu_session_id)
     logger.warning("[TOOL] trigger_pdu_session_release(%s, psi=%d) — HIGH-RISK", ns, psi)
 
-    # --- pre-condition: is there a real session to release? ---
-    if not cs.ue_node_exists(ns):
-        logger.error("[TOOL] UE %s not present on control plane (nr-ue not running) — nothing to release.", ns)
-        return {
-            "status": "noop", "verified": False, "action": "PDU_SESSION_RELEASE",
-            "supi": ns, "pdu_session_id": psi,
-            "pre_state": "NO_UE", "post_state": "NO_UE",
-            "detail": "UE node absent — no live PDU session exists to release.",
-        }
-    if not cs.session_is_active(ns, psi):
-        logger.error("[TOOL] PDU session %d for %s is NOT active — nothing to release.", psi, ns)
+    # --- pre-condition: does the CORE (AMF) register this session? ---
+    try:
+        sess = cs.amf_pdu_session(ns, psi)
+    except cs.CoreUnavailable as e:
+        return {"status": "error", "verified": False, "action": "PDU_SESSION_RELEASE",
+                "supi": ns, "pdu_session_id": psi, "error": str(e)}
+
+    if sess is None:
+        try:
+            registered = cs.registered_ue_context(ns).get("registered", False)
+        except cs.CoreUnavailable:
+            registered = False
+        if not registered:
+            logger.error("[TOOL] UE %s not registered in the AMF — nothing to release.", ns)
+            return {
+                "status": "noop", "verified": False, "action": "PDU_SESSION_RELEASE",
+                "supi": ns, "pdu_session_id": psi,
+                "pre_state": "NO_UE", "post_state": "NO_UE",
+                "detail": "UE not attached to the AMF — no live PDU session exists to release.",
+            }
+        logger.error("[TOOL] AMF has no PDU session %d for %s — nothing to release.", psi, ns)
         return {
             "status": "noop", "verified": False, "action": "PDU_SESSION_RELEASE",
             "supi": ns, "pdu_session_id": psi,
@@ -202,37 +221,52 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
             "detail": "No active PDU session with that id — release not performed.",
         }
 
-    pre_dp = cs.data_plane_up(ns, psi)
+    sm_context_ref = sess.get("sm_context_ref") or ""
+    if not sm_context_ref:
+        return {
+            "status": "error", "verified": False, "action": "PDU_SESSION_RELEASE",
+            "supi": ns, "pdu_session_id": psi,
+            "error": "AMF did not expose an SM-context reference; cannot address a core release.",
+        }
+
     # Capture the UE's data-plane tunnel BEFORE release — its disappearance is an
     # independent, physical confirmation that the session was really torn down.
     pre_pl = cs.ps_list(ns)
     pre_sess = pre_pl.get("sessions", {}).get(psi, {}) if pre_pl.get("available") else {}
     pre_ip = str(pre_sess.get("address", "")).split("/")[0] if pre_sess.get("address") else ""
     pre_iface = cs._iface_for_ip(pre_ip) if pre_ip else None
+    pre_dp = cs.data_plane_up(ns, psi)
 
-    # --- action ---
-    res = cs.nr_cli(ns, f"ps-release {psi}")
-    logger.info("[TOOL] nr-cli ps-release stdout=%r rc=%d", res.stdout, res.returncode)
-    if res.cli_error:
+    # --- action: network-initiated release via the SMF service-based interface ---
+    try:
+        rel = cs.smf_release_sm_context(sm_context_ref)
+    except cs.CoreUnavailable as e:
+        return {"status": "error", "verified": False, "action": "PDU_SESSION_RELEASE",
+                "supi": ns, "pdu_session_id": psi, "error": str(e)}
+    logger.info("[TOOL] SMF ReleaseSMContext %s -> HTTP %d", rel.endpoint, rel.status_code)
+    if not rel.ok:
         return {
             "status": "error", "verified": False, "action": "PDU_SESSION_RELEASE",
             "supi": ns, "pdu_session_id": psi,
-            "error": res.stdout or res.stderr or "nr-cli reported an error",
-            "nr_cli_output": res.stdout,
+            "error": f"SMF ReleaseSMContext returned HTTP {rel.status_code}: {rel.detail}".rstrip(": "),
+            "release_api": {"endpoint": rel.endpoint, "http_status": rel.status_code},
         }
 
-    # UERANSIM releases asynchronously (UE -> SMF -> UPF). The "PDU Session
-    # Release Command" reaches the UE within ~1s, but full teardown of the
-    # session + uesimtun interface can take a few seconds. Poll two independent
-    # signals until EITHER confirms the session is gone:
-    #   (1) control plane: the session no longer appears ACTIVE in nr-cli ps-list
+    # The SMF tears the session down asynchronously (SMF -> UPF N4 delete, and
+    # SMF -> AMF -> UE release command). Poll two independent signals until EITHER
+    # confirms the session is gone:
+    #   (1) control plane: the AMF no longer registers the PDU session
     #   (2) data plane:    the UE's uesimtun tunnel interface has disappeared
-    cp_released = False   # control-plane confirms gone
+    cp_released = False   # control-plane (core) confirms gone
     dp_released = False   # data-plane tunnel gone
     for _ in range(15):   # up to ~12s
         time.sleep(0.8)
-        if not cp_released and not cs.session_is_active(ns, psi):
-            cp_released = True
+        if not cp_released:
+            try:
+                if not cs.amf_session_active(ns, psi):
+                    cp_released = True
+            except cs.CoreUnavailable:
+                pass
         if not dp_released and pre_iface and cs._iface_for_ip(pre_ip) is None:
             dp_released = True
         if cp_released or dp_released:
@@ -243,29 +277,30 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
     verified = cp_released or dp_released
 
     if not verified:
-        logger.error("[TOOL] Release command sent but session %d still ACTIVE after polling — NOT verified.", psi)
+        logger.error("[TOOL] SMF accepted the release but session %d not yet confirmed gone.", psi)
         return {
             "status": "error", "verified": False, "action": "PDU_SESSION_RELEASE",
             "supi": ns, "pdu_session_id": psi,
             "pre_state": "ACTIVE", "post_state": "ACTIVE",
-            "detail": "ps-release sent but neither control plane nor data plane shows it gone.",
-            "nr_cli_output": res.stdout,
+            "detail": "SMF accepted the release but neither the AMF nor the data plane shows it gone yet.",
+            "release_api": {"endpoint": rel.endpoint, "http_status": rel.status_code},
         }
 
     confirmed_by = []
     if cp_released:
-        confirmed_by.append("control-plane (nr-cli ps-list: session gone)")
+        confirmed_by.append("control-plane (AMF: PDU session no longer registered)")
     if dp_released:
-        confirmed_by.append(f"data-plane (tunnel {pre_iface} removed)")
-    logger.critical("[ATTACK EVIDENCE] PDU session %d for %s VERIFIED RELEASED — %s.",
+        confirmed_by.append(f"data-plane (UE tunnel {pre_iface} removed)")
+    logger.critical("[ATTACK EVIDENCE] PDU session %d for %s VERIFIED RELEASED via core API — %s.",
                     psi, ns, "; ".join(confirmed_by))
     return {
         "status": "ok", "verified": True, "action": "PDU_SESSION_RELEASED",
         "supi": ns, "pdu_session_id": psi,
         "pre_state": "ACTIVE", "post_state": "RELEASED",
+        "sm_context_ref": sm_context_ref,
+        "release_api": {"endpoint": rel.endpoint, "http_status": rel.status_code},
         "confirmed_by": confirmed_by,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "nr_cli_output": res.stdout or "(release procedure triggered)",
         "dataplane_before": pre_dp,
         "dataplane_after": post_dp,
     }
@@ -372,8 +407,9 @@ TOOL_SCHEMA = [
     },
     {
         "name": "trigger_pdu_session_release",
-        "description": ("Release an active PDU session for a subscriber. HIGH-RISK: immediately terminates "
-                        "the subscriber's data connectivity. Only for verified, operator-authorised steps."),
+        "description": ("Release an active PDU session for a subscriber via the 5G core's network-initiated "
+                        "release API (SMF ReleaseSMContext). HIGH-RISK: immediately terminates the "
+                        "subscriber's data connectivity. Only for verified, operator-authorised steps."),
         "parameters": {"type": "object",
                        "properties": {"supi_token": {"type": "string", "description": "SUPI/IMSI string."},
                                       "pdu_session_id": {"type": "integer", "description": "PDU session ID (typically 1)."}},

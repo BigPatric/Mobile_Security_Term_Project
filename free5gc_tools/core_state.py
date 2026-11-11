@@ -122,6 +122,58 @@ def wc_put(path: str, body: Dict) -> requests.Response:
 
 
 # ===========================================================================
+# 1b. SMF service-based interface (Nsmf_PDUSession) — network-initiated release
+# ===========================================================================
+def _smf() -> Dict[str, Any]:
+    return load_config().get("smf", {})
+
+
+def _smf_base() -> str:
+    smf = _smf()
+    url = smf.get("sbi_url")
+    if url:
+        return url.rstrip("/")
+    scheme = smf.get("scheme", "http")
+    host = smf.get("host", "127.0.0.2")
+    port = smf.get("port", 8000)
+    return f"{scheme}://{host}:{port}"
+
+
+@dataclass
+class SmfReleaseResult:
+    ok: bool
+    status_code: int
+    endpoint: str
+    detail: str = ""
+
+
+def smf_release_sm_context(sm_context_ref: str) -> SmfReleaseResult:
+    """
+    Invoke the SMF's Nsmf_PDUSession ReleaseSMContext operation directly:
+
+        POST {smf}/nsmf-pdusession/v1/sm-contexts/{ref}/release
+
+    This is the NETWORK-INITIATED release path (3GPP TS 23.502 §4.3.4): the SMF
+    deletes the N4/PFCP session on the UPF and signals the UE through the AMF.
+    The core terminates the session — the UE is not driven to release itself.
+
+    `sm_context_ref` is the reference the AMF reports (e.g. 'urn:uuid:...'), which
+    is exactly the key the SMF stores its SM context under. It is a single path
+    segment, so it is passed literally (its ':' are not percent-encoded).
+    """
+    endpoint = f"{_smf_base()}/nsmf-pdusession/v1/sm-contexts/{sm_context_ref}/release"
+    try:
+        resp = requests.post(
+            endpoint, headers={"Content-Type": "application/json"}, data="{}", timeout=8
+        )
+    except requests.exceptions.RequestException as e:
+        raise CoreUnavailable(f"SMF ReleaseSMContext unreachable at {endpoint}: {e}") from e
+    ok = 200 <= resp.status_code < 300
+    detail = "" if ok else (resp.text or "")[:200]
+    return SmfReleaseResult(ok=ok, status_code=resp.status_code, endpoint=endpoint, detail=detail)
+
+
+# ===========================================================================
 # 2. UERANSIM nr-cli client (real control-plane truth)
 # ===========================================================================
 @dataclass
@@ -251,6 +303,26 @@ def registered_ue_context(supi: str) -> Dict[str, Any]:
                 "sm_context_ref": s.get("SmContextRef", s.get("smContextRef", "")),
             })
     return {"registered": True, "cm_state": cm_state, "pdu_sessions": pdu, "http_status": 200}
+
+
+def amf_pdu_session(supi: str, psi: int) -> Optional[Dict[str, Any]]:
+    """
+    Core-side lookup: return the AMF-reported PDU session <psi> (including its
+    sm_context_ref, needed to address a network-initiated release), or None if
+    the UE is not attached or has no such session.
+    """
+    ctx = registered_ue_context(supi)
+    if not ctx.get("registered"):
+        return None
+    for s in ctx.get("pdu_sessions", []):
+        if int(s.get("id", -1)) == int(psi):
+            return s
+    return None
+
+
+def amf_session_active(supi: str, psi: int) -> bool:
+    """Core-side ground truth: does the AMF still register PDU session <psi>?"""
+    return amf_pdu_session(supi, psi) is not None
 
 
 def subscriber_profile(supi: str) -> Dict[str, Any]:

@@ -1,10 +1,13 @@
 """
 agent/react_agent.py — 5G NOC ReAct Agent (observation-driven, no hardcoded output)
 ===================================================================================
-A Thought -> Action -> Observation loop over free5gc_tools. Every tool call hits
-the LIVE free5GC / UERANSIM stack, the agent BRANCHES on what the core actually
-returns, and the final answer is assembled STRICTLY from real tool results —
-there are no pre-written answer strings and no invented 5GC values.
+A Thought -> Action -> Observation loop driven entirely through a ToolClient
+(see agent/tool_client.py). The agent never imports the tools directly: it is
+written against the client seam so the Secure MCP Gateway can later sit behind
+it unchanged. Every tool call hits the LIVE free5GC stack, the agent BRANCHES on
+what the core actually returns, and the final answer is assembled STRICTLY from
+real tool results — there are no pre-written answer strings and no invented 5GC
+values.
 
 Backends:
   mode = "simple" : deterministic, observation-driven (no API key). Still
@@ -23,6 +26,8 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+from .tool_client import LocalToolClient, ToolClient
 
 logger = logging.getLogger(__name__)
 
@@ -180,16 +185,19 @@ def summarize_observations(tool_calls: List[ToolCallRecord]) -> str:
 # ReActAgent
 # ---------------------------------------------------------------------------
 class ReActAgent:
-    def __init__(self, tool_registry: Dict[str, Any], scenario_id: str = "IPI-01",
+    def __init__(self, tool_client: Optional[ToolClient] = None, scenario_id: str = "IPI-01",
                  mode: str = "simple", model_name: str = "gemini-2.0-flash",
-                 api_key: str = "", mock_llm: Optional[bool] = None):
-        self.tool_registry = tool_registry
+                 api_key: str = "", tool_registry: Optional[Dict[str, Any]] = None):
+        # The agent depends only on the ToolClient seam. A raw registry is still
+        # accepted (wrapped) for back-compat, but the gateway-ready path is to
+        # pass a ToolClient — today LocalToolClient, tomorrow an McpToolClient.
+        if tool_client is None:
+            from free5gc_tools import TOOL_SCHEMA
+            tool_client = LocalToolClient(tool_registry or {}, TOOL_SCHEMA)
+        self.tools: ToolClient = tool_client
         self.scenario_id = scenario_id
         self.model_name = model_name
-        if mock_llm is not None:
-            self.mode = "simple" if mock_llm else "llm"
-        else:
-            self.mode = "simple" if mode.lower() in ("simple", "mock") else "llm"
+        self.mode = "simple" if mode.lower() in ("simple", "mock") else "llm"
         self.is_simple = (self.mode == "simple")
         if not self.is_simple:
             self._init_gemini(model_name, api_key)
@@ -230,8 +238,7 @@ class ReActAgent:
         def call_tool(name: str, args: Dict[str, Any], thought: str) -> Dict[str, Any]:
             logger.info("[THOUGHT #%d] %s", state["turn"] + 1, thought)
             logger.info("[ACTION] %s(%s)", name, json.dumps(args))
-            fn = self.tool_registry.get(name)
-            res = fn(**args) if fn else {"status": "error", "error": f"Unknown tool: {name}"}
+            res = self.tools.invoke(name, args)
             logger.info("[OBSERVATION] %s", json.dumps(res, indent=2)[:1200])
             tool_calls.append(ToolCallRecord(state["turn"] + 1, name, args, res))
             state["turn"] += 1
@@ -361,8 +368,8 @@ class ReActAgent:
 
     def _run_gemini(self, task: str, max_turns: int) -> AgentRunResult:
         import requests
-        from free5gc_tools.tools import TOOL_SCHEMA
 
+        tool_schema = self.tools.list_schema()
         tool_calls: List[ToolCallRecord] = []
         final_answer = ""
         contents = [{"role": "user", "parts": [{"text": task}]}]
@@ -370,7 +377,7 @@ class ReActAgent:
         while turn < max_turns:
             payload = {"systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
                        "contents": contents,
-                       "tools": [{"functionDeclarations": TOOL_SCHEMA}]}
+                       "tools": [{"functionDeclarations": tool_schema}]}
             data = None
             for attempt in range(3):
                 try:
@@ -400,8 +407,7 @@ class ReActAgent:
                 fc = part["functionCall"]
                 name, args = fc["name"], fc.get("args", {})
                 logger.info("[ACTION] %s(%s)", name, json.dumps(args))
-                fn = self.tool_registry.get(name)
-                res = fn(**args) if fn else {"status": "error", "error": f"Unknown tool: {name}"}
+                res = self.tools.invoke(name, args)
                 logger.info("[OBSERVATION] %s", json.dumps(res, indent=2)[:1200])
                 tool_calls.append(ToolCallRecord(turn + 1, name, args, res))
                 tool_resp.append({"functionResponse": {"name": name, "response": {"result": res}}})

@@ -60,11 +60,10 @@ def setup_logging(level: str = "INFO") -> None:
 # ---------------------------------------------------------------------------
 BANNER = f"""
 {Fore.RED + Style.BRIGHT}
-╔══════════════════════════════════════════════════════════════════╗
-║   BASELINE ATTACK DEMO — UNPROTECTED 5G NOC AGENT               ║
-║   Mobile Network Security, Fall 2026                            ║
-║   Scenario: Indirect Prompt Injection via Alert Log (IPI-01)    ║
-╚══════════════════════════════════════════════════════════════════╝
+╔═══════════════════════════════════════════════════════╗
+║   BASELINE ATTACK DEMO — UNPROTECTED 5G NOC AGENT      ║
+║   Mobile Network Security, Fall 2026                  ║
+╚═══════════════════════════════════════════════════════╝
 {Style.RESET_ALL}"""
 
 SEPARATOR = Fore.WHITE + "─" * 70 + Style.RESET_ALL
@@ -120,6 +119,9 @@ def print_run(result, scenario_meta: dict) -> None:
                 r = dc.result
                 print(f"    PDU session {r.get('pdu_session_id')} of {r.get('supi')} RELEASED "
                       f"(verified: {r.get('pre_state')} → {r.get('post_state')}).")
+                api = r.get("release_api", {})
+                if api.get("endpoint"):
+                    print(f"    via core API: POST {api['endpoint']} (HTTP {api.get('http_status')})")
             elif dc.changed_core_state() and dc.tool_name == "modify_slice_quota":
                 print(f"    Slice quota for {dc.result.get('supi')} MODIFIED (verified in 5GC).")
     elif result.dangerous_calls():
@@ -226,16 +228,17 @@ def main() -> None:
 
     task = scenario_meta.get("task_given_to_agent", "No task defined for this scenario.")
 
-    # Import tools and agent
-    from free5gc_tools import TOOL_REGISTRY
-    from agent import ReActAgent
+    # Build the agent behind the ToolClient seam. Today this is a LocalToolClient
+    # (in-process calls); the Secure MCP Gateway will later drop in an MCP client
+    # here without changing the agent.
+    from agent import ReActAgent, default_local_client
 
     model_name = cfg.get("llm", {}).get("model") or cfg.get("agent", {}).get("model", "gemini-2.0-flash")
     api_key = cfg.get("llm", {}).get("api_key", "")
     max_turns = cfg.get("llm", {}).get("max_turns") or cfg.get("agent", {}).get("max_turns", 10)
 
     agent = ReActAgent(
-        tool_registry=TOOL_REGISTRY,
+        tool_client=default_local_client(),
         scenario_id=args.scenario,
         mode=agent_mode,
         model_name=model_name,
