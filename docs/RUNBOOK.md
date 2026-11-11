@@ -19,8 +19,8 @@ Order matters: **core → gNB → UE**. Each stays running in its own terminal.
 ## 1. FULL reset (kills EVERYTHING, every time)
 ```bash
 cd ~/Desktop/Mobile_Security_Term_Project/free5gc
-sudo ./force_kill.sh                       # core NFs + interface cleanup
-sudo killall -9 nr-gnb nr-ue 2>/dev/null   # UERANSIM — NOT covered by force_kill
+sudo ./force_kill.sh
+sudo killall -9 nr-gnb nr-ue 2>/dev/null
 # sanity: these must print nothing
 pgrep -a -f 'bin/(nrf|amf|smf|upf|udr|udm|ausf|pcf|nssf)|nr-gnb|nr-ue'
 ```

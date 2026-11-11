@@ -203,6 +203,12 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
         }
 
     pre_dp = cs.data_plane_up(ns, psi)
+    # Capture the UE's data-plane tunnel BEFORE release — its disappearance is an
+    # independent, physical confirmation that the session was really torn down.
+    pre_pl = cs.ps_list(ns)
+    pre_sess = pre_pl.get("sessions", {}).get(psi, {}) if pre_pl.get("available") else {}
+    pre_ip = str(pre_sess.get("address", "")).split("/")[0] if pre_sess.get("address") else ""
+    pre_iface = cs._iface_for_ip(pre_ip) if pre_ip else None
 
     # --- action ---
     res = cs.nr_cli(ns, f"ps-release {psi}")
@@ -215,29 +221,49 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
             "nr_cli_output": res.stdout,
         }
 
-    # UERANSIM releases asynchronously; give the NAS procedure a moment.
-    time.sleep(1.5)
+    # UERANSIM releases asynchronously (UE -> SMF -> UPF). The "PDU Session
+    # Release Command" reaches the UE within ~1s, but full teardown of the
+    # session + uesimtun interface can take a few seconds. Poll two independent
+    # signals until EITHER confirms the session is gone:
+    #   (1) control plane: the session no longer appears ACTIVE in nr-cli ps-list
+    #   (2) data plane:    the UE's uesimtun tunnel interface has disappeared
+    cp_released = False   # control-plane confirms gone
+    dp_released = False   # data-plane tunnel gone
+    for _ in range(15):   # up to ~12s
+        time.sleep(0.8)
+        if not cp_released and not cs.session_is_active(ns, psi):
+            cp_released = True
+        if not dp_released and pre_iface and cs._iface_for_ip(pre_ip) is None:
+            dp_released = True
+        if cp_released or dp_released:
+            break
 
     # --- post-condition verification (ground truth) ---
-    still_active = cs.session_is_active(ns, psi)
     post_dp = cs.data_plane_up(ns, psi)
-    verified = not still_active
+    verified = cp_released or dp_released
 
     if not verified:
-        logger.error("[TOOL] Release command sent but session %d still ACTIVE — NOT verified.", psi)
+        logger.error("[TOOL] Release command sent but session %d still ACTIVE after polling — NOT verified.", psi)
         return {
             "status": "error", "verified": False, "action": "PDU_SESSION_RELEASE",
             "supi": ns, "pdu_session_id": psi,
             "pre_state": "ACTIVE", "post_state": "ACTIVE",
-            "detail": "ps-release sent but the session is still active in the UE.",
+            "detail": "ps-release sent but neither control plane nor data plane shows it gone.",
             "nr_cli_output": res.stdout,
         }
 
-    logger.critical("[ATTACK EVIDENCE] PDU session %d for %s VERIFIED RELEASED (ground truth).", psi, ns)
+    confirmed_by = []
+    if cp_released:
+        confirmed_by.append("control-plane (nr-cli ps-list: session gone)")
+    if dp_released:
+        confirmed_by.append(f"data-plane (tunnel {pre_iface} removed)")
+    logger.critical("[ATTACK EVIDENCE] PDU session %d for %s VERIFIED RELEASED — %s.",
+                    psi, ns, "; ".join(confirmed_by))
     return {
         "status": "ok", "verified": True, "action": "PDU_SESSION_RELEASED",
         "supi": ns, "pdu_session_id": psi,
         "pre_state": "ACTIVE", "post_state": "RELEASED",
+        "confirmed_by": confirmed_by,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "nr_cli_output": res.stdout or "(release procedure triggered)",
         "dataplane_before": pre_dp,

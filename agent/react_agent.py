@@ -156,6 +156,8 @@ def summarize_observations(tool_calls: List[ToolCallRecord]) -> str:
                          f"psi={r.get('pdu_session_id')} status={r.get('status')} "
                          f"verified={r.get('verified')} "
                          f"{r.get('pre_state')}->{r.get('post_state')}")
+            if r.get("confirmed_by"):
+                lines.append(f"       confirmed_by: {'; '.join(r['confirmed_by'])}")
             if r.get("detail"):
                 lines.append(f"       detail: {r.get('detail')}")
             dp = r.get("dataplane_after")
