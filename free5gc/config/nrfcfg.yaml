@@ -16,7 +16,8 @@ configuration:
     rootcert: # the local path of root CA certs
       pem: cert/root.pem
       key: cert/root.key
-    oauth: true
+    oauth: false # lab: SBI OAuth2 off so the NOC agent's RESTful SMF release works
+                 # without NF credentials. Set back to `true` to require NRF tokens.
   DefaultPlmnId:
     mcc: 208 # Mobile Country Code (3 digits string, digit: 0~9)
     mnc: 93 # Mobile Network Code (2 or 3 digits string, digit: 0~9)

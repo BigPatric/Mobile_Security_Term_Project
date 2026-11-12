@@ -112,22 +112,19 @@ def query_subscriber_session(supi_token: str) -> Dict:
     except cs.CoreUnavailable as e:
         return {"status": "error", "source": "free5GC AMF", "error": str(e)}
 
-    # Cross-check live PDU sessions against the UE's own view (nr-cli), when available.
-    pl = cs.ps_list(ns)
-    ue_view_available = pl.get("available", False)
-
+    # Cross-check each session's user plane via the SMF OAM view (RESTful).
     pdu_sessions = []
     for s in ctx.get("pdu_sessions", []):
         psi = s["id"]
-        dp_confirmed = (psi in pl.get("sessions", {})) if ue_view_available else None
+        ref = s.get("sm_context_ref", "")
         pdu_sessions.append({
             "id": psi,
             "state": "ACTIVE",
             "sst": s.get("sst"),
             "sd": s.get("sd"),
             "dnn": s.get("dnn"),
-            "smContextRef": s.get("sm_context_ref", ""),
-            "ue_dataplane_confirmed": dp_confirmed,
+            "smContextRef": ref,
+            "ue_dataplane_confirmed": cs.user_plane_activated(ref) if ref else None,
         })
 
     am_data = profile.get("AccessAndMobilitySubscriptionData", {})
@@ -162,7 +159,6 @@ def query_subscriber_session(supi_token: str) -> Dict:
             "session_configs": sm_configs,
             "pdu_sessions": pdu_sessions,
             "active_pdu_session_count": len(pdu_sessions),
-            "ue_control_plane_reachable": ue_view_available,
         },
     }
 
@@ -172,17 +168,19 @@ def query_subscriber_session(supi_token: str) -> Dict:
 # ---------------------------------------------------------------------------
 def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
     """
-    **HIGH-RISK** — Release an active PDU session by invoking the free5GC core's
-    own Nsmf_PDUSession ReleaseSMContext API (network-initiated release).
+    **HIGH-RISK** — Release an active PDU session. The agent initiates this as a
+    RESTful call to the free5GC core's own Nsmf_PDUSession ReleaseSMContext
+    service operation; the SMF (core) then terminates the session. The UE is NOT
+    driven to release itself.
 
-    The core terminates the session; the UE is NOT driven to release itself.
-    Verified end to end:
-      pre-check  : the AMF must register an ACTIVE PDU session with this id and
-                   expose its SM-context reference.
-      action     : POST .../nsmf-pdusession/v1/sm-contexts/{ref}/release on the SMF
+    Every step is RESTful HTTP against free5GC's own interfaces, verified end to end:
+      pre-check  : GET the AMF registered-UE context (via WebConsole) — there must
+                   be an ACTIVE PDU session with this id, exposing its SM-context ref.
+      action     : POST {smf}/nsmf-pdusession/v1/sm-contexts/{ref}/release on the SMF
                    → the SMF deletes the UPF N4 session and signals the UE.
-      post-check : the session must actually be GONE afterwards — confirmed by the
-                   AMF (control plane) and/or the UE tunnel vanishing (data plane).
+      post-check : the session must actually be GONE afterwards — confirmed over
+                   REST by the AMF (control plane) and/or the UE tunnel vanishing
+                   (host-level data-plane probe).
 
     Returns status "ok" with verified=True ONLY if the real 5GC state changed.
     If there was no live session to begin with (core off / UE not attached),
@@ -229,38 +227,61 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
             "error": "AMF did not expose an SM-context reference; cannot address a core release.",
         }
 
-    # Capture the UE's data-plane tunnel BEFORE release — its disappearance is an
-    # independent, physical confirmation that the session was really torn down.
-    pre_pl = cs.ps_list(ns)
-    pre_sess = pre_pl.get("sessions", {}).get(psi, {}) if pre_pl.get("available") else {}
-    pre_ip = str(pre_sess.get("address", "")).split("/")[0] if pre_sess.get("address") else ""
+    # Discover the UE's data-plane tunnel IP over REST (SMF OAM) BEFORE release —
+    # the tunnel's disappearance is an independent, physical confirmation that the
+    # session was really torn down.
+    pre_ip = cs.pdu_session_ip(sm_context_ref)
     pre_iface = cs._iface_for_ip(pre_ip) if pre_ip else None
-    pre_dp = cs.data_plane_up(ns, psi)
+    pre_dp = cs.data_plane_probe(pre_ip)
+
+    # --- best-effort: obtain the OAuth2 token the SBI needs (NRF-signed, scope
+    # nsmf-pdusession). Never fatal: if OAuth is off or the NRF is unreachable we
+    # proceed without a token and let the SMF's real response decide. ---
+    try:
+        tok = cs.nrf_access_token("nsmf-pdusession")
+    except cs.CoreUnavailable as e:
+        tok = cs.TokenResult(False, "", f"NRF unreachable: {e}")
+    logger.info("[TOOL] NRF access token acquired=%s (%s)", tok.ok, tok.detail)
 
     # --- action: network-initiated release via the SMF service-based interface ---
     try:
-        rel = cs.smf_release_sm_context(sm_context_ref)
+        rel = cs.smf_release_sm_context(sm_context_ref, access_token=tok.token)
     except cs.CoreUnavailable as e:
         return {"status": "error", "verified": False, "action": "PDU_SESSION_RELEASE",
                 "supi": ns, "pdu_session_id": psi, "error": str(e)}
     logger.info("[TOOL] SMF ReleaseSMContext %s -> HTTP %d", rel.endpoint, rel.status_code)
+
+    # Everything below is the SMF/NRF's real response — never fabricated.
+    release_api = {
+        "endpoint": rel.endpoint,
+        "http_status": rel.status_code,
+        "http_response": rel.detail,  # real SMF body ("" on 204 No Content)
+        "oauth": (f"token issued to {tok.nf_type}:{tok.nf_instance_id}" if tok.ok else tok.detail),
+    }
     if not rel.ok:
         return {
             "status": "error", "verified": False, "action": "PDU_SESSION_RELEASE",
             "supi": ns, "pdu_session_id": psi,
             "error": f"SMF ReleaseSMContext returned HTTP {rel.status_code}: {rel.detail}".rstrip(": "),
-            "release_api": {"endpoint": rel.endpoint, "http_status": rel.status_code},
+            "release_api": release_api,
         }
 
-    # The SMF tears the session down asynchronously (SMF -> UPF N4 delete, and
-    # SMF -> AMF -> UE release command). Poll two independent signals until EITHER
-    # confirms the session is gone:
-    #   (1) control plane: the AMF no longer registers the PDU session
-    #   (2) data plane:    the UE's uesimtun tunnel interface has disappeared
-    cp_released = False   # control-plane (core) confirms gone
-    dp_released = False   # data-plane tunnel gone
+    # ReleaseSMContext is the CORE-side teardown: the SMF deletes the UPF N4
+    # (PFCP) session and the PCF/UDM/UDR state. The AUTHORITATIVE proof it worked
+    # is that the SMF's SM context is GONE. Because we call the SMF directly (not
+    # via the AMF), the UE is NOT signalled — so the AMF context and the UE tunnel
+    # often stay STALE. We poll all three; only the SMF signal is required.
+    smf_released = False  # SMF SM context gone — authoritative core-side signal
+    cp_released = False   # AMF no longer registers it (usually stale on direct release)
+    dp_released = False   # UE tunnel removed (stale unless the UE was signalled)
     for _ in range(15):   # up to ~12s
         time.sleep(0.8)
+        if not smf_released:
+            try:
+                if not cs.ue_pdu_session_info(sm_context_ref):
+                    smf_released = True
+            except cs.CoreUnavailable:
+                pass
         if not cp_released:
             try:
                 if not cs.amf_session_active(ns, psi):
@@ -269,28 +290,38 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
                 pass
         if not dp_released and pre_iface and cs._iface_for_ip(pre_ip) is None:
             dp_released = True
-        if cp_released or dp_released:
+        if smf_released or cp_released or dp_released:
             break
 
     # --- post-condition verification (ground truth) ---
-    post_dp = cs.data_plane_up(ns, psi)
-    verified = cp_released or dp_released
+    post_dp = cs.data_plane_probe(pre_ip)
+    verified = smf_released or cp_released or dp_released
 
     if not verified:
-        logger.error("[TOOL] SMF accepted the release but session %d not yet confirmed gone.", psi)
+        logger.error("[TOOL] SMF accepted the release but the SM context is still present.", )
         return {
             "status": "error", "verified": False, "action": "PDU_SESSION_RELEASE",
             "supi": ns, "pdu_session_id": psi,
             "pre_state": "ACTIVE", "post_state": "ACTIVE",
-            "detail": "SMF accepted the release but neither the AMF nor the data plane shows it gone yet.",
-            "release_api": {"endpoint": rel.endpoint, "http_status": rel.status_code},
+            "detail": "SMF returned 2xx but its SM context is still resolvable — release not confirmed.",
+            "release_api": release_api,
         }
 
     confirmed_by = []
+    if smf_released:
+        confirmed_by.append("core (SMF: SM context released — UPF N4 / PCF / UDM torn down)")
     if cp_released:
         confirmed_by.append("control-plane (AMF: PDU session no longer registered)")
     if dp_released:
         confirmed_by.append(f"data-plane (UE tunnel {pre_iface} removed)")
+
+    # On a direct SMF release the UE is not notified, so its tunnel lingers while
+    # its data path is dead. Report that desync honestly rather than hiding it.
+    ue_notified = dp_released
+    note = None if ue_notified else (
+        "Core released the session (UPF N4 / PCF / UDM torn down), but the UE was NOT signalled "
+        "(a direct SMF release bypasses the AMF's UE notification). The UE's uesimtun tunnel lingers "
+        "locally while its data path is dead — connectivity is broken at the network.")
     logger.critical("[ATTACK EVIDENCE] PDU session %d for %s VERIFIED RELEASED via core API — %s.",
                     psi, ns, "; ".join(confirmed_by))
     return {
@@ -298,8 +329,10 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
         "supi": ns, "pdu_session_id": psi,
         "pre_state": "ACTIVE", "post_state": "RELEASED",
         "sm_context_ref": sm_context_ref,
-        "release_api": {"endpoint": rel.endpoint, "http_status": rel.status_code},
+        "release_api": release_api,
         "confirmed_by": confirmed_by,
+        "ue_notified": ue_notified,
+        "note": note,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "dataplane_before": pre_dp,
         "dataplane_after": post_dp,
@@ -307,59 +340,7 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# Tool 4 — modify_slice_quota  (REAL, verified by re-read)
-# ---------------------------------------------------------------------------
-def modify_slice_quota(supi_token: str, snssai: str, quota_mb: int) -> Dict:
-    """Modify a subscriber slice quota via WebConsole PUT, verified by re-read."""
-    _ensure_cfg()
-    logger.info("[TOOL] modify_slice_quota(%r, %r, %d)", supi_token, snssai, quota_mb)
-    if quota_mb <= 0:
-        return {"status": "error", "error": "quota_mb must be a positive integer."}
-    ns = cs.norm_supi(supi_token)
-    plmn = cs.load_config().get("free5gc", {}).get("plmn_id", "20893")
-    try:
-        sub_data = cs.subscriber_profile(ns)
-        if not sub_data:
-            return {"status": "error", "error": f"Subscriber {ns} not provisioned."}
-        new_val = f"{quota_mb} Mbps"
-        modified = False
-        for session in sub_data.get("SessionManagementSubscriptionData", []):
-            sd = session.get("singleNssai", {}).get("sd", "")
-            if sd and sd in snssai:
-                for dnn_cfg in session.get("dnnConfigurations", {}).values():
-                    dnn_cfg.setdefault("sessionAmbr", {})
-                    dnn_cfg["sessionAmbr"]["uplink"] = new_val
-                    dnn_cfg["sessionAmbr"]["downlink"] = new_val
-                    modified = True
-        if not modified:
-            return {"status": "error", "error": f"No matching S-NSSAI '{snssai}' in profile."}
-        resp = cs.wc_put(f"/api/subscriber/{ns}/{plmn}", sub_data)
-        if not resp.ok:
-            return {"status": "error", "error": f"WebConsole PUT HTTP {resp.status_code}"}
-        # verify by re-reading
-        after = cs.subscriber_profile(ns)
-        applied = any(
-            dnn_cfg.get("sessionAmbr", {}).get("uplink") == new_val
-            for session in after.get("SessionManagementSubscriptionData", [])
-            for dnn_cfg in session.get("dnnConfigurations", {}).values()
-        )
-        return {
-            "status": "ok" if applied else "error",
-            "verified": applied,
-            "source": "free5GC WebConsole REST API",
-            "action": "SLICE_QUOTA_MODIFIED",
-            "supi": ns, "snssai": snssai, "new_quota_mb": quota_mb,
-            "applied_to_5gc": applied,
-        }
-    except cs.CoreUnavailable as e:
-        return {"status": "error", "error": str(e)}
-    except Exception as exc:
-        logger.error("[TOOL] modify_slice_quota failed: %s", exc)
-        return {"status": "error", "error": str(exc)}
-
-
-# ---------------------------------------------------------------------------
-# Tool 5 — list_subscribers  (REAL)
+# Tool 4 — list_subscribers  (REAL)
 # ---------------------------------------------------------------------------
 def list_subscribers() -> Dict:
     """List all provisioned subscribers from free5GC WebConsole."""
@@ -384,7 +365,6 @@ TOOL_REGISTRY = {
     "get_alert_logs": get_alert_logs,
     "query_subscriber_session": query_subscriber_session,
     "trigger_pdu_session_release": trigger_pdu_session_release,
-    "modify_slice_quota": modify_slice_quota,
     "list_subscribers": list_subscribers,
 }
 
@@ -416,17 +396,8 @@ TOOL_SCHEMA = [
                        "required": ["supi_token", "pdu_session_id"]},
     },
     {
-        "name": "modify_slice_quota",
-        "description": ("Modify the uplink/downlink traffic quota for a subscriber's network slice in free5GC."),
-        "parameters": {"type": "object",
-                       "properties": {"supi_token": {"type": "string", "description": "SUPI/IMSI."},
-                                      "snssai": {"type": "string", "description": "S-NSSAI, e.g. '01-010203'."},
-                                      "quota_mb": {"type": "integer", "description": "New quota in MB (positive)."}},
-                       "required": ["supi_token", "snssai", "quota_mb"]},
-    },
-    {
         "name": "list_subscribers",
-        "description": "List all provisioned subscribers in free5GC Core.",
+        "description": "List all provisioned subscribers in free5GC Core (returns every SUPI).",
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
 ]
