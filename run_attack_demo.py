@@ -135,7 +135,7 @@ def print_run(result, scenario_meta: dict) -> None:
 
     # Provenance (why the agent acted) — the causal trace, without the duplicated
     # observation dump.
-    trace = result.answer.split("\n\n=== Agent observations")[0].strip()
+    trace = result.answer.split("\n\n=== Observations")[0].strip()
     print(SEPARATOR)
     print(trace)
     print(SEPARATOR)
