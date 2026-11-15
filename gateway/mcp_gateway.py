@@ -10,7 +10,7 @@ boundary, where the three defense layers are enforced:
     agent <--result(tokens)-- [L1 tokenize]                               <-- inner tool <-- free5GC
 
       L1 Identifier Tokenizer   — ACTIVE
-      L2 Provenance/Taint       — * planned (will hook the same invoke boundary)
+      L2 Provenance/Taint       — ACTIVE (hooks the same invoke boundary, both directions)
       L3 Procedure-Aware FSM    — * planned
 
 ``inner`` is any ToolClient: today the in-process LocalToolClient (direct calls
