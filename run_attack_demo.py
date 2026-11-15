@@ -181,6 +181,14 @@ def main() -> None:
         choices=["ENUM-01", "DOS-01"],
         help="ENUM-01 = list all subscribers (SUPI leak); DOS-01 = release all PDU sessions (default)",
     )
+    parser.add_argument(
+        "--gateway",
+        choices=["on", "off"],
+        default=None,
+        help="Enforce the Secure MCP Gateway (Layer 1 tokenizer). Overrides config "
+             "gateway.enabled. Use 'off' for the unprotected baseline, 'on' for the "
+             "protected run (A/B comparison / ablation).",
+    )
     args = parser.parse_args()
 
     # Load config
@@ -221,10 +229,20 @@ def main() -> None:
     sess_label = (f"{Fore.GREEN + Style.BRIGHT}ACTIVE PDU session present for {victim}{Style.RESET_ALL}"
                   if session_live else
                   f"{Fore.YELLOW}no active PDU session (agent can be hijacked, but no real DoS){Style.RESET_ALL}")
+    # Gateway on/off: CLI flag overrides config.
+    if args.gateway is not None:
+        gateway_on = args.gateway == "on"
+    else:
+        gateway_on = cfg.get("gateway", {}).get("enabled", False)
+    gw_label = (f"{Fore.GREEN + Style.BRIGHT}ON  (Layer 1: Identifier Tokenizer){Style.RESET_ALL}"
+                if gateway_on else
+                f"{Fore.RED + Style.BRIGHT}OFF (unprotected baseline){Style.RESET_ALL}")
+
     print(f"  WebConsole (REST / AMF discovery) : {_updown(health.webconsole)}")
     print(f"  SMF SBI (Nsmf release target)     : {_updown(health.smf)}{'' if needs_smf else '  (not needed for ENUM-01)'}")
     print(f"  Victim session                    : {sess_label}")
     print(f"  Scenario                          : {Fore.CYAN}{args.scenario}{Style.RESET_ALL}")
+    print(f"  Secure MCP Gateway                : {gw_label}")
     print()
 
     # --- Gate: the pieces this scenario actually uses must be live. ---
@@ -271,7 +289,11 @@ def main() -> None:
     from agent import ReActAgent, default_local_client
 
     max_turns = cfg.get("agent", {}).get("max_turns", 10)
-    agent = ReActAgent(tool_client=default_local_client(), scenario_id=args.scenario)
+    tool_client = default_local_client()
+    if gateway_on:
+        from gateway import GatewayToolClient
+        tool_client = GatewayToolClient(tool_client)
+    agent = ReActAgent(tool_client=tool_client, scenario_id=args.scenario)
 
     # Reaching here means the core is live (the gate above exits otherwise).
     print(f"{Fore.WHITE + Style.BRIGHT}▶  Running agent…{Style.RESET_ALL}\n")
@@ -290,6 +312,8 @@ def main() -> None:
         "webconsole_up": health.webconsole,
         "smf_up": health.smf,
         "live_session_present": session_live,
+        "gateway_enabled": gateway_on,
+        "gateway_layers": (["tokenizer"] if gateway_on else []),
         "agent_mode": "deterministic",
         "agent_hijacked": result.hijacked,
         "was_attacked": result.was_attacked,
