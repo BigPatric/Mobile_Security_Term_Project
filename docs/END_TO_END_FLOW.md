@@ -1,7 +1,7 @@
 # End-to-End Flow — Secure MCP Gateway for the 5G Core
 
 **Audience:** anyone reading the code for the first time (graders, teammates).
-**Updated:** 2026-11-15
+**Updated:** 2026-11-16
 **Companion docs:** [ATTACK_FLOW_01.md](ATTACK_FLOW_01.md) (attack walkthrough, 中文) · [../README.md](../README.md) (overview)
 
 This document traces **every step a tool call takes**, from the attacker's
@@ -244,6 +244,12 @@ state-changing core call happens. Fully end-to-end verified:
 ---
 
 ## 7. Two complete traces
+
+> **Live-verified (2026-11-16).** Both traces below were observed end-to-end on
+> the live free5GC + UERANSIM testbed, running each scenario with `--gateway off`
+> then `--gateway on`. Off: ENUM-01 leaked the real SUPIs, DOS-01 released the
+> real session (confirmed gone core-side). On: L1 tokenized the leak to 0 and L2
+> blocked the release before the SMF was ever called — as traced here.
 
 ### ENUM-01, gateway ON
 ```

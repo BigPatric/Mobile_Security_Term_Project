@@ -130,10 +130,18 @@ layer-off ablation check).
 | ReAct agent → tool → live free5GC (end to end) | ✅ | `run_attack_demo.py` |
 | **ENUM-01** — subscriber enumeration / SUPI leak | ✅ demonstrated | agent lists every SUPI |
 | **DOS-01** — mass PDU-session release via core API | ✅ demonstrated | real `ReleaseSMContext`, verified gone |
-| **L1** — identifier tokenization (leak → 0) | ✅ built + live-verified | ENUM leak: `YES` (off) → `no` (on) |
-| **L2** — taint tracking (blocks injected DoS) | ✅ built + verified | `tests/test_taint.py` |
+| **L1** — identifier tokenization (leak → 0) | ✅ built + live-verified | A/B live run: ENUM leak `YES` (off) → `no` (on) |
+| **L2** — taint tracking (blocks injected DoS) | ✅ built + live-verified | A/B live run: DOS released (off) → **blocked** by L2 (on); also `tests/test_taint.py` |
 | **L3** — procedure FSM + rate limit | ⬜ planned | — |
 | Two LLM models, benign set, ablation table, latency | ⬜ planned | — |
+
+> **Live verification (2026-11-16).** Both attacks were run end-to-end against the
+> live free5GC + UERANSIM testbed with the gateway toggled `off`/`on`. Gateway
+> `off`: ENUM-01 leaks every real SUPI and DOS-01 releases the real PDU session
+> (confirmed gone core-side). Gateway `on`: **L1** hands the agent only opaque
+> tokens (leak = 0) and **L2** blocks the injected release before it reaches the
+> SMF — the core is never called. This matches the two traces in
+> [docs/END_TO_END_FLOW.md](docs/END_TO_END_FLOW.md) §7.
 
 ---
 
