@@ -38,6 +38,16 @@ nrf:
   cert_dir: "free5gc/cert"
   # consumer: { type: "NEF", instance_id: "f7ec9409-15a4-4440-9f5e-cb51d4053ecd" }
 
+# Secure MCP Gateway. When enabled, a GatewayToolClient wraps the tool seam and
+# enforces the defense layers. CLI --gateway on/off overrides this per run (for
+# A/B baseline-vs-protected comparison and ablation studies).
+gateway:
+  enabled: true
+  layers:
+    tokenizer: true     # Layer 1 — Identifier Tokenizer (SUPI opacity)
+    taint: true         # Layer 2 — Provenance & Taint Tracking
+    verifier: false     # Layer 3 — planned
+
 demo:
   log_level: "INFO"
   evidence_log: "attack_evidence.jsonl"
