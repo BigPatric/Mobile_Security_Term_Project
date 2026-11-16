@@ -193,7 +193,11 @@ are in [docs/Notes](docs/Notes). `--gateway` overrides `gateway.enabled` in
   follow the TS 23.502 PDU-session state machine and stay within rate limits →
   blocks out-of-order operations (double / no-context release) and control-plane
   DoS (bulk teardown). This is the only layer that binds an *authorized* caller,
-  so the ablation shows it catching what L1/L2 structurally cannot.
+  so the ablation shows it catching what L1/L2 structurally cannot. **Key point:
+  L3 does not depend on being able to verify authorization.** When authorization
+  is forgeable, stolen, or a trusted insider errs, L3 still *bounds the damage* by
+  rate (blast-radius cap) and *fully blocks* procedure-illegal operations by FSM —
+  the backstop that holds after the provenance/authorization line is defeated.
 
 Each layer closes a distinct attack class; the ablation study (removing one at a
 time) is what demonstrates that none is redundant.

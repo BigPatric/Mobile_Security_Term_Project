@@ -330,9 +330,23 @@ release 的**數量/順序**不會因為「有張 ticket」就變合法,所以 b
 單元測試 [`tests/test_verifier.py`](../tests/test_verifier.py) 的
 `test_authorized_bulk_still_blocked_by_l3` 以決定性方式證明此邏輯(不依賴 testbed 大小)。
 
-> **誠實 caveat:** L3 是 rate limit,把「release ALL」收斂成「最多 N 筆」,**不是 0**。cap 之前那幾筆
+> **誠實 caveat:** L3 的 rate limit 把「release ALL」收斂成「最多 N 筆」,**不是 0**。cap 之前那幾筆
 > 仍會過 —— 這是 rate-limiting 的本質(bound the blast radius)。要 live demo 看到 L3 作用,testbed 要有
 > **≥ cap+1 條 session**(多掛幾個 UE),或把 `config.gateway.verifier_opts.max_releases` 設低。
+
+### 結論:L3 的核心價值 — 不依賴「能否驗證授權」
+
+前面談過,要真正杜絕偽造授權,理想解是把授權換成 gateway 能**獨立驗證**的簽章 capability(§8.1 的延伸討論)。
+但在真實系統裡,授權常常**無法完全驗證**:token 可被偽造、credential 可能被盜、或根本是一個**可信內部人
+誤操作**——這些情況下,任何「看來源 / 看授權」的防線(L1/L2)都會失明。
+
+> **L3 的結論就是:即使我們無法驗證授權的真偽,仍能把損害限制在可控範圍。**
+>
+> - 對**數量**(可被濫用的合法操作):**bound the blast radius** —— 把「release ALL」收斂成「最多 N 筆」。
+> - 對**順序**(定義上非法的操作):**全擋** —— double / out-of-state release 直接 0 通過(TS 23.502 §4.3.4)。
+
+L3 不信任何可被偽造的訊號,只拿「操作本身 vs. PDU session 的真實程序狀態與速率」對帳。所以它是縱深防禦裡
+**關不掉的底線**:L1 擋機密性、L2 擋來源完整性、**L3 擋程序完整性,並在授權防線被攻破時保證損害有上限**。
 
 ---
 
