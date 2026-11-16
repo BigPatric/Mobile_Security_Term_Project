@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Set
 from agent.tool_client import ToolClient
 from .tokenizer import IdentifierTokenizer
 from .taint_tracker import TaintTracker
+from .verifier import ProcedureVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +42,21 @@ class GatewayToolClient(ToolClient):
     ablation study (proposal slide 8): drop each layer and re-measure.
         enable_tokenizer -> Layer 1 (identifier opacity + raw-SUPI rejection)
         enable_taint     -> Layer 2 (provenance / taint tracking)
+        enable_verifier  -> Layer 3 (procedure-aware FSM + rate limit)
     """
 
     def __init__(self, inner: ToolClient, tokenizer: Optional[IdentifierTokenizer] = None,
                  identifier_params: Optional[Set[str]] = None,
                  enable_tokenizer: bool = True, enable_taint: bool = True,
-                 taint: Optional[TaintTracker] = None):
+                 enable_verifier: bool = False,
+                 taint: Optional[TaintTracker] = None,
+                 verifier: Optional[ProcedureVerifier] = None):
         self.inner = inner
         self.tokenizer = tokenizer or IdentifierTokenizer()
         self.identifier_params = identifier_params if identifier_params is not None else _IDENTIFIER_PARAMS
         self.enable_tokenizer = enable_tokenizer
         self.taint = taint if taint is not None else (TaintTracker() if enable_taint else None)
+        self.verifier = verifier if verifier is not None else (ProcedureVerifier() if enable_verifier else None)
 
     def active_layers(self) -> List[str]:
         layers = []
@@ -59,6 +64,8 @@ class GatewayToolClient(ToolClient):
             layers.append("tokenizer")
         if self.taint is not None:
             layers.append("taint")
+        if self.verifier is not None:
+            layers.append("verifier")
         return layers
 
     # The agent discovers tools unchanged — the gateway is transparent here.
@@ -114,11 +121,23 @@ class GatewayToolClient(ToolClient):
                 logger.warning("[GW:L2] BLOCKED %s: %s", name, block["reason"])
                 return block
 
+        # L3 procedure gate — reject out-of-state / excessive high-risk calls,
+        # even trusted/authorized ones (runs on the real, detokenized args).
+        if self.verifier is not None:
+            block = self.verifier.screen_call(name, real_args)
+            if block is not None:
+                logger.warning("[GW:L3] BLOCKED %s: %s", name, block["reason"])
+                return block
+
         result = self.inner.invoke(name, real_args)
 
         # L2: propagate taint from untrusted sources (raw result, pre-tokenize).
         if self.taint is not None:
             self.taint.observe_result(name, result)
+
+        # L3: learn procedure state from results (raw result, pre-tokenize).
+        if self.verifier is not None:
+            self.verifier.observe_result(name, result)
 
         if self.enable_tokenizer:
             # OUT (core -> agent): replace every real SUPI with an opaque token.

@@ -166,7 +166,7 @@ def query_subscriber_session(supi_token: str) -> Dict:
 # ---------------------------------------------------------------------------
 # Tool 3 — trigger_pdu_session_release  (HIGH-RISK, VERIFIED)
 # ---------------------------------------------------------------------------
-def trigger_pdu_session_release(supi_token: str, pdu_session_id: int) -> Dict:
+def trigger_pdu_session_release(supi_token: str, pdu_session_id: int, **_gw_meta) -> Dict:
     """
     **HIGH-RISK** — Release an active PDU session. The agent initiates this as a
     RESTful call to the free5GC core's own Nsmf_PDUSession ReleaseSMContext

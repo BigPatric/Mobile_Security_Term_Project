@@ -46,7 +46,17 @@ gateway:
   layers:
     tokenizer: true     # Layer 1 — Identifier Tokenizer (SUPI opacity)
     taint: true         # Layer 2 — Provenance & Taint Tracking
-    verifier: false     # Layer 3 — planned
+    verifier: true      # Layer 3 — Procedure-Aware FSM + rate limit
+  # Layer 3 tuning. max_releases/window_sec = sliding-window rate cap on PDU
+  # releases (bulk teardown = DoS). For a live DOS-02 demo on a small testbed,
+  # set max_releases to (#sessions - 1) so the bulk trips while a single legit
+  # release still passes. exempt_authorized=false => L3 binds even authorized
+  # callers (the point: it catches what L2's authorization branch lets through).
+  verifier_opts:
+    max_releases: 3
+    window_sec: 60
+    require_established: false
+    exempt_authorized: false
 
 demo:
   log_level: "INFO"
