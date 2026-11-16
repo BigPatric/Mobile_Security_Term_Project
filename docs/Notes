@@ -13,6 +13,8 @@ sudo ./build/nr-gnb -c ./config/free5gc-gnb.yaml
 UE:
 sudo ./build/nr-ue -c ./config/free5gc-ue.yaml
 
+sudo ./build/nr-ue -c config/free5gc-ue.yaml -n 3 -t 2000
+
 
 Remember to refresh
 
