@@ -1,0 +1,78 @@
+===========================================================
+Questions for Advisor — Secure MCP Gateway (Mobile Network Security)
+112550018 · 更新: 2026-11-17
+===========================================================
+
+說明:每題附「背後疑慮 / 我的初步判斷 / 建議問法 / 答案會改變什麼」。
+優先問 Q2、Q5、Q6(決定剩一個月的工作重心)。
+
+-----------------------------------------------------------
+Q1. 只做 PDU release 算 procedure-aware 嗎?還是要 establishment 等?
+-----------------------------------------------------------
+疑慮  : 「procedure-aware」的最低門檻在哪。
+判斷  : 1 個 procedure 能證明概念可行,但宣稱 procedure-aware 通常被期待 >=2 個
+        (至少 release + establishment),否則易被說成「只是對 release 做 rate limit」。
+問法  : 「L3 目前只對 PDU release 做 FSM+rate 並已 live 驗證。宣稱 procedure-aware,
+         需不需要再做 establishment/modification,還是 release 做深、其餘列 future work 即可?」
+影響  : 要做 -> 擴 FSM(工作量中);不用 -> 時間留給真 LLM / 評估。
+
+-----------------------------------------------------------
+Q2. Scripted agent 能算嗎?還是要接真 LLM?
+-----------------------------------------------------------
+疑慮  : 最可能被扣分的點,想知道嚴不嚴重。
+判斷  : scripted = 最壞情況的淪陷 agent,當 control 正當;但「擋得住真模型被說服」
+        scripted 證明不了。多數評審期待至少一個真 LLM 的 run。
+問法  : 「攻擊 agent 目前是 deterministic script(模擬完全淪陷)。期末是否一定要接真 LLM
+         跑 ASR,還是 threat model 講清楚、scripted 當 worst-case control 可接受?
+         若要真 LLM,一個夠還是兩個?」
+影響  : 直接決定剩一個月最大一塊工作要不要排進去。
+
+-----------------------------------------------------------
+Q3. 為了實驗把 OAuth 關掉,行不行?
+-----------------------------------------------------------
+疑慮  : 這個簡化會不會讓實驗「不算數」。
+判斷  : 可以,但要論證正交。防禦點在 gateway / tool-call 邊界,跟 SBI 的 OAuth 是不同層
+        (OAuth 保護 NF 之間;三層保護 agent->core)。關掉只是讓 lab 的 release REST 成立,
+        不改變攻防邏輯;但降低真實性,要誠實寫,並說明 production 開 OAuth 時 gateway 照常運作
+        (甚至能多驗 token scope)。
+問法  : 「lab 設 nrfcfg oauth:false 以直接打 SMF release。這簡化在評估上可接受嗎?
+         我的論點是 OAuth(NF 間)與 gateway(agent->core)正交——這論述站得住嗎?」
+影響  : 要求開 OAuth -> 處理 token(code 已有 nrf_access_token best-effort);接受 -> 當 limitation。
+
+-----------------------------------------------------------
+Q4. 偽造 authorization 進 log、讓 agent 無法分辨,行得通嗎?
+-----------------------------------------------------------
+疑慮  : DOS-02 是真威脅還是為了證明 L3 而人造。
+判斷  : 把論點從「log」抽象出來更穩。真正成立的不是「NF log 裡會有授權」,而是
+        「agent 把任何 in-band 讀到的文字當成授權」。只要輸入通道(log/工單/tenant intent)
+        可被攻擊者影響、且授權是 in-band 字串,laundering 就成立。log 只是載體之一。
+問法  : 「DOS-02 假設 agent 把 log 內的授權宣稱當真。更準確說是『in-band 授權(來自不可信
+         通道的字串)不可信』——這威脅模型成立嗎?還是真實系統授權本來就在 out-of-band 通道,
+         使此攻擊不實際?」
+影響  : 認同 -> 把敘述升級成「in-band 授權不可信」,論述更硬;質疑 -> 引出 fix(簽章 capability)當 future work。
+
+-----------------------------------------------------------
+Q5.(總 scope)期末該做到什麼程度?
+-----------------------------------------------------------
+疑慮  : 避免方向錯、做白工。
+問法  : 「以這門課標準,期末的 must-have 最小集合是什麼?(三層都堪用?真 LLM?
+         量化 ASR/FP/latency?基線?)哪些可當 future work?」
+影響  : 一次定位 Q1–Q4 的深度要求。
+
+-----------------------------------------------------------
+Q6. Benign set 與 Baseline 對照要做到什麼程度?
+-----------------------------------------------------------
+疑慮  : 「防禦會不會誤擋正常運維」「比 generic guardrail/RBAC 好在哪」——proposal 自己承諾過。
+問法  : 「(a) benign false-positive:要幾條、要不要含『合法單筆 release』這種最難分的 case?
+         (b) baseline:RBAC/allow-list 與 generic LLM guardrail 一定要實作,還是概念比較即可?」
+影響  : 決定要不要花時間造 benign set 與實作基線。
+
+===========================================================
+技術真實性(可當面請教的實作提示)
+===========================================================
+- 直打 SMF ReleaseSMContext、跳過 AMF->gNB->UE:UE 側仍 PS-ACTIVE、只 UPF N4 被拆——
+  算公平的 network-side DoS 嗎?有沒有辦法在 free5GC 觸發完整 AMF-mediated release 讓 UE 真斷?
+- testbed 穩定性:3 UE 同時建立只成功 2 個(UPF 中途掛 + CHF charging 逾時)。
+  推薦做法?(-t 錯開啟動 / 關 CHF charging / 調 timeout)
+- 證據權威性:控制面(SMF context 消失)+ 資料面(uesimtun ping 前通後斷)夠不夠,
+  還是想看 PFCP/N4 log 層級?

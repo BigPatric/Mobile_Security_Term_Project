@@ -317,7 +317,7 @@ if self._authorized(real_args):      # 只看有沒有 operator_authorization / 
 release 的**數量/順序**不會因為「有張 ticket」就變合法,所以 bulk teardown 照擋。
 **授權騙得過 provenance,騙不過 procedure state。**
 
-### Ablation(離線模擬實測:3 sessions、L3 `max_releases=2`)
+### Ablation(3 sessions、L3 `max_releases=2`;L2+L3 一行為 **live 實測**,其餘為離線模擬)
 
 | 設定 | releases 打進 core | sessions 被斷 | 結論 |
 |---|---|---|---|

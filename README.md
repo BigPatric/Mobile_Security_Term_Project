@@ -135,7 +135,7 @@ layer-off ablation check).
 | **DOS-01** — mass PDU-session release via core API | ✅ demonstrated | real `ReleaseSMContext`, verified gone |
 | **L1** — identifier tokenization (leak → 0) | ✅ built + live-verified | A/B live run: ENUM leak `YES` (off) → `no` (on) |
 | **L2** — taint tracking (blocks injected DoS) | ✅ built + live-verified | A/B live run: DOS released (off) → **blocked** by L2 (on); also `tests/test_taint.py` |
-| **L3** — procedure FSM + rate limit | ✅ built + unit-tested | `tests/test_verifier.py` (8/8): double-release, bulk DoS, authorized-bulk-still-blocked, ablation |
+| **L3** — procedure FSM + rate limit | ✅ built + unit-tested + live-verified | DOS-02 live (3 UEs): bulk release capped at `max_releases` — 3rd release blocked by L3, 3rd session survives; `tests/test_verifier.py` 8/8 |
 | Two LLM models, benign set, ablation table, latency | ⬜ planned | — |
 
 > **Live verification (2026-11-16).** Both attacks were run end-to-end against the
@@ -201,6 +201,33 @@ are in [docs/Notes](docs/Notes). `--gateway` overrides `gateway.enabled` in
 
 Each layer closes a distinct attack class; the ablation study (removing one at a
 time) is what demonstrates that none is redundant.
+
+### L3 — current scope and roadmap
+
+**Current scope (built + live-verified).** L3 enforces exactly one procedure —
+**PDU-session release** (`trigger_pdu_session_release`) — with two checks on
+every caller: **FSM / ordering** (an already-`RELEASED` session cannot be
+released again → hard block, TS 23.502 §4.3.4) and **rate / volume** (≤
+`max_releases` per sliding window → bulk teardown is capped). State is learned
+from results already crossing the gateway (`query_subscriber_session` → `ACTIVE`,
+a confirmed release → `RELEASED`); no extra core calls. This is the minimal set
+the DOS-01 / DOS-02 scenarios need.
+
+**Roadmap (future work).**
+1. **Full PDU-session FSM** — add establishment / modification (TS 23.502
+   §4.3.2–4.3.3), not just release, to deliver the "2–3 procedures" the proposal
+   promised.
+2. **More high-risk sinks** — bring `modify_slice_quota` and other state-changing
+   operations under the same FSM + rate framework.
+3. **Replay / freshness** — reject replayed (even validly-signed) release messages
+   via nonce / timestamp / idempotency.
+4. **Finer policy** — per-tenant / per-slice rate limits and adaptive thresholds
+   (a learned "normal" rate) instead of a single global cap.
+5. **State reconciliation** — periodically reconcile the gateway FSM with real
+   core state, so it does not drift when a session is released by another path.
+6. **Capability-bound authorization** — pair L3 with a gateway-verifiable *signed*
+   capability (replacing the plaintext `operator_authorization`), and check the
+   capability's scope covers this procedure and volume.
 
 ---
 
