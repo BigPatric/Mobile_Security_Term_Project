@@ -1,0 +1,78 @@
+===========================================================
+Questions for Advisor — Secure MCP Gateway (Mobile Network Security)
+112550018 · 2026-11-18(整理版)
+===========================================================
+
+會面目標:先定「期末 must-have」,剩一個月照這個排工作。
+時間不夠時,只問【A】就好。
+
+名詞(問之前先講清楚)
+  ASR     = Attack Success Rate,攻擊真的打到 core 的比例(無防禦 / L1 / L1+L2 / L1-L3 各一個)
+  FP      = False Positive,正常運維被 gateway 誤擋的比例(需要 benign set)
+  latency = gateway 對每個 tool call 增加的延遲
+  baseline= 對照組:無防禦、RBAC/allow-list、generic LLM guardrail
+
+===========================================================
+【A】決定 scope(一定要問)
+===========================================================
+
+A1. 期末 must-have 勾選
+    「以下哪些是期末必要、哪些可以當 future work?」
+      [√] 三層(L1/L2/L3)都 live 可用
+      [ ] 至少一個真 LLM agent 跑攻擊(目前是 scripted)
+      [ ] 量化 ASR / FP / latency
+      [ ] benign set(誤擋測試)
+      [ ] baseline 實作(RBAC、LLM guardrail)
+      [ ] L3 涵蓋 >=2 個 procedure(目前只有 PDU release)
+    → 這一題的答案決定 A2、A3、B1 要做多深。
+
+A2. Scripted agent 夠不夠?(最可能扣分的地方)
+    現況:攻擊 agent 是 deterministic script,模擬「完全淪陷」的 worst case。
+    問:「scripted 當 worst-case control 可以接受嗎?還是一定要接真 LLM 跑 ASR?
+         如果要,一個模型夠嗎?」
+    影響:這是剩一個月裡最大的一塊工作。
+
+A3. Benign set 與 baseline 要做到多深?
+    (a) benign:大概要幾條?要不要包含「合法的單筆 release」這種最難分辨的 case?
+    (b) baseline:RBAC / generic LLM guardrail 一定要實作出數字,
+        還是用文字說明「RBAC 原理上擋不住有權限的濫用」就可以?
+    背景:proposal 有承諾「不誤擋正常運維」「比 RBAC / guardrail 好」。
+
+===========================================================
+【B】實驗是否站得住(有時間就問)
+===========================================================
+
+B1. 只做 PDU release 能宣稱 procedure-aware 嗎?
+    我的判斷:只有 1 個 procedure 容易被說成「只是 rate limit」。
+    問:「需要再做 establishment / modification,還是把 release 做深、其餘列 future work?」
+
+B2. DOS-02 的威脅模型成立嗎?
+    論點:重點不是「log 裡有授權」,而是「agent 把 in-band 讀到的字串當成授權」。
+          log、工單、tenant intent 只要攻擊者影響得到,都能拿來做授權偽造。
+    問:「這個威脅模型成立嗎?還是真實系統的授權本來就走 out-of-band,所以攻擊不實際?」
+    若被質疑 → 簽章 capability 當 future work。
+
+B3. 關掉 OAuth(nrfcfg oauth:false)可以嗎?
+    論點:OAuth 保護 NF 之間,gateway 保護 agent→core,兩者是不同層。
+    問:「這個簡化在評估上可接受嗎?正交的論述站得住嗎?」
+    若要開 → code 已有 nrf_access_token(best-effort);接受 → 寫進 limitation。
+
+===========================================================
+【C】技術細節(最後問,或寄 email 問)
+===========================================================
+
+C1. 直接打 SMF ReleaseSMContext:UE 仍是 PS-ACTIVE,只有 UPF N4 被拆。
+    這樣算公平的 network-side DoS 嗎?free5GC 能不能觸發完整的 AMF-mediated release?
+C2. Testbed 穩定性:3 個 UE 同時建立只成功 2 個(UPF 中途掛 + CHF charging 逾時)。
+    建議用 -t 錯開啟動、關 CHF charging,還是調 timeout?
+C3. 證據:控制面(SMF context 消失)夠嗎?
+
+
+
+
+gateway have a sequence of the config, like when facing the PDU release request from the agent,
+we provide a method to check or something, we have to provide a general solution
+
+SMF is ok, and the React agent are enough, llm is not needed
+Oauth off also ok
+We just have to prove this gateway can protect 

@@ -47,16 +47,77 @@ gateway:
     tokenizer: true     # Layer 1 — Identifier Tokenizer (SUPI opacity)
     taint: true        # Layer 2 — Provenance & Taint Tracking
     verifier: true      # Layer 3 — Procedure-Aware FSM + rate limit
-  # Layer 3 tuning. max_releases/window_sec = sliding-window rate cap on PDU
-  # releases (bulk teardown = DoS). For a live DOS-02 demo on a small testbed,
-  # set max_releases to (#sessions - 1) so the bulk trips while a single legit
-  # release still passes. exempt_authorized=false => L3 binds even authorized
-  # callers (the point: it catches what L2's authorization branch lets through).
-  verifier_opts:
-    max_releases: 2
-    window_sec: 60
-    require_established: false
-    exempt_authorized: false
+  # ----------------------------------------------------------------------
+  # Policy pipeline (gateway/policy.py). Each tool lists an ORDERED chain of
+  # checks; the first check that blocks stops the call before the core.
+  #   identifier (L1) · provenance (L2) · fsm / rate / core_precheck (L3)
+  # Turning a layer off above drops its checks from every chain (ablation).
+  # Adding a procedure or guarding a new tool = editing this section, no code.
+  # ----------------------------------------------------------------------
+  policy:
+    untrusted_sources: [get_alert_logs]          # results from these taint the session
+    identifier_params: [supi_token, supi, imsi]  # must carry gateway-issued tokens
+
+    procedures:
+      pdu_session:                               # TS 23.502 §4.3 life-cycle
+        key: ["supi_token|supi|imsi", pdu_session_id]
+        initial: UNKNOWN
+        states: [UNKNOWN, ACTIVE, RELEASED]
+        observe:
+          - tool: query_subscriber_session
+            when: {status: ok}
+            for_each: subscriber.pdu_sessions
+            key: [subscriber.supi, item.id]
+            set: ACTIVE
+            keep: [RELEASED]                     # gateway memory beats a stale AMF view
+        transitions:
+          release:
+            from: [ACTIVE, UNKNOWN]              # existence is checked against the core below
+            to: RELEASED
+            commit_when: {status: ok, verified: true}
+
+    tools:
+      "*":                                       # any tool without its own entry
+        checks: [identifier]
+
+      trigger_pdu_session_release:
+        checks:
+          - identifier
+          - provenance: {allow_authorized: true}
+          - fsm: {procedure: pdu_session, event: release}
+          # Bulk-teardown cap. On a small testbed set max = (#sessions - 1) so the
+          # bulk trips while one legitimate release still passes. Not exempt for
+          # authorized callers: this is what catches DOS-02's forged authorization.
+          - rate: {bucket: pdu_release, max: 2, window_sec: 60, exempt_authorized: false}
+          # Ground truth: the gateway itself asks the core that this session
+          # exists before forwarding (placed after rate so a bulk attack can't
+          # make the gateway hammer the core with prechecks).
+          - core_precheck:
+              via: query_subscriber_session
+              args: {supi_token: $supi_token}
+              expect:
+                status: ok
+                exists: {in: subscriber.pdu_sessions, where: {id: $pdu_session_id}}
+
+      list_subscribers:
+        checks:
+          - identifier
+          - rate: {bucket: enumeration, max: 5, window_sec: 60}
+
+# Comparison baselines, expressed in the SAME policy language so the comparison
+# is like-for-like. Run with:  run_attack_demo.py --gateway rbac --scenario ...
+baselines:
+  rbac:
+    # Classic role allow-list: the NOC-agent role may call these four tools,
+    # nothing else. No identifier opacity, no provenance, no procedure state.
+    layers: {tokenizer: false, taint: false, verifier: false}
+    policy:
+      tools:
+        "*":                         {checks: [deny]}
+        get_alert_logs:              {checks: []}
+        list_subscribers:            {checks: []}
+        query_subscriber_session:    {checks: []}
+        trigger_pdu_session_release: {checks: []}
 
 demo:
   log_level: "INFO"

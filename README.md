@@ -104,7 +104,10 @@ Mobile_Security_Term_Project/
 | [tokenizer.py](gateway/tokenizer.py) | **L1** ✅ | Identifier opacity. Rewrites every real SUPI in a tool *result* to a stable opaque token (`token_sub_a8f9`) before the agent sees it, and restores it on the *argument* path. Also rejects raw SUPIs and unknown tokens in arguments. → *identifier leakage = 0%*. |
 | [taint_tracker.py](gateway/taint_tracker.py) | **L2** ✅ | Provenance / taint. Marks the session TAINTED when an untrusted source (`get_alert_logs`) returns, and blocks a high-risk state change (PDU release) that is driven by that untrusted content and lacks operator authorization. Value-level *and* control-flow taint, with a traceable reason. |
 | [verifier.py](gateway/verifier.py) | **L3** ✅ | Procedure-aware FSM (TS 23.502 PDU-session state machine) + sliding-window rate limit. Blocks out-of-state releases (double / no-context) and bulk teardown **even from trusted, operator-authorized sources** — the case L2 lets through. Binds everyone by default (`exempt_authorized=False`). |
-| [mcp_gateway.py](gateway/mcp_gateway.py) | — | `GatewayToolClient` — the enforcing `ToolClient` that wires the layers at the tool-call boundary. Layers are individually switchable for the ablation study. |
+| [policy.py](gateway/policy.py) | — | **Config-driven policy pipeline.** `PolicyEngine` builds an ordered check chain per tool from `config.yaml` (`gateway.policy`); the first check that blocks stops the call. New tools / procedures are config, not code. Bad policies are rejected at build time. |
+| [checks/](gateway/checks/) | L0–L3 | The pluggable checks: `identifier` (L1), `provenance` (L2), `fsm` / `rate` / `core_precheck` (L3), `deny` (L0, for the RBAC baseline). `core_precheck` has the gateway itself ask the core that the precondition holds before forwarding. |
+| [procedures.py](gateway/procedures.py) | L3 | 3GPP procedure specs as data (PDU-session life-cycle). |
+| [mcp_gateway.py](gateway/mcp_gateway.py) | — | `GatewayToolClient` — the enforcing `ToolClient` at the tool-call boundary: detokenize → policy chain → core → observe → tokenize. Block responses are redacted (no raw SUPI). Records every decision (check trace, gateway overhead) for the evidence log. |
 
 ### `free5gc_tools/` — MCP tool shim (the only code that touches the core)
 | File | Role |
@@ -116,13 +119,20 @@ Mobile_Security_Term_Project/
 `attacks/enumerate_subscribers.json` (ENUM-01), `attacks/release_all_sessions.json`
 (DOS-01), and `attacks/authorized_bulk_release.json` (DOS-02) define each scenario:
 the operator task, the poisoned log payload (DOS-02's also forges an authorization
-token), and the expected hijacked behavior. (`benign/` for false-positive cases — to be added.)
+token), and the expected hijacked behavior. `benign/` holds BENIGN-01…04 — legitimate
+operator tasks (read-only health checks, an authorized single release, and the same in a
+tainted session) used to measure the false-positive rate.
 
 ### `tests/` — offline unit tests (no live core)
 [test_tokenizer.py](tests/test_tokenizer.py) (L1: tokenization, round-trip,
-raw-SUPI / unknown-token rejection) and [test_taint.py](tests/test_taint.py)
+raw-SUPI / unknown-token rejection), [test_taint.py](tests/test_taint.py)
 (L2: taint propagation, block-on-untrusted, authorization pass, and the
-layer-off ablation check).
+layer-off ablation check), [test_verifier.py](tests/test_verifier.py) (L3),
+[test_policy.py](tests/test_policy.py) (pipeline: a new procedure declared in config only,
+core precheck, redaction, decision trace, allow-list) and
+[test_e2e_scenarios.py](tests/test_e2e_scenarios.py) — the real agent + real `config.yaml`
+policy against a fake testbed core, every scenario × {off, rbac, ablations, full}; run it
+directly to print the expected-results matrix (needs `requirements.txt`).
 
 ---
 
@@ -136,7 +146,9 @@ layer-off ablation check).
 | **L1** — identifier tokenization (leak → 0) | ✅ built + live-verified | A/B live run: ENUM leak `YES` (off) → `no` (on) |
 | **L2** — taint tracking (blocks injected DoS) | ✅ built + live-verified | A/B live run: DOS released (off) → **blocked** by L2 (on); also `tests/test_taint.py` |
 | **L3** — procedure FSM + rate limit | ✅ built + unit-tested + live-verified | DOS-02 live (3 UEs): bulk release capped at `max_releases` — 3rd release blocked by L3, 3rd session survives; `tests/test_verifier.py` 8/8 |
-| Two LLM models, benign set, ablation table, latency | ⬜ planned | — |
+| **Policy pipeline** — config-driven check chains, core precheck | ✅ built + unit-tested | `tests/test_policy.py`, `tests/test_e2e_scenarios.py`; live: ⬜ pending |
+| Benign set, RBAC baseline, ablation (`--layers`), per-call gateway overhead | ✅ built, offline-verified | `run_attack_demo.py --scenario BENIGN-0x / --gateway rbac / --layers`; live: ⬜ pending |
+| Real LLM agent | ⬜ not required (advisor, 2026-11-18) | scripted worst-case agent is the control |
 
 > **Live verification (2026-11-16).** Both attacks were run end-to-end against the
 > live free5GC + UERANSIM testbed with the gateway toggled `off`/`on`. Gateway

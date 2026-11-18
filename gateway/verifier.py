@@ -33,26 +33,29 @@ The gateway feeds the FSM by OBSERVING results it already passes through:
 Aligns with the proposal (slide 6: "state machines for PDU session
 establishment/modification/release; block out-of-state sequences and abnormal
 call rates").
+
+Implementation note: since the policy pipeline (gateway/policy.py) this class is
+a convenience FACADE over the generic checks — FsmCheck on the PDU-session
+procedure spec (gateway/procedures.py) followed by a RateCheck. The config-driven
+PolicyEngine builds the same checks from config.yaml; this class keeps the
+original standalone API (screen_call / observe_result / state / explain).
 """
 
 from __future__ import annotations
 
-import logging
 import time
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
-from collections import deque
+from typing import Any, Callable, Dict, Optional
 
-logger = logging.getLogger(__name__)
+from .checks import CallContext, Check, FsmCheck, ProcedureStore, RateBucket, RateCheck
+from .procedures import pdu_session_procedure
 
-# Per-session key = (real SUPI, PDU session id). Values are FSM states.
-_ACTIVE = "ACTIVE"
-_RELEASED = "RELEASED"
-
-SessionKey = Tuple[str, Any]
+_RELEASE_TOOL = "trigger_pdu_session_release"
 
 
-class ProcedureVerifier:
-    HIGH_RISK_SINKS = {"trigger_pdu_session_release"}
+class ProcedureVerifier(Check):
+    kind = "verifier"
+    layer = "L3"
+    HIGH_RISK_SINKS = {_RELEASE_TOOL}
 
     def __init__(self,
                  max_releases: int = 3,
@@ -74,106 +77,47 @@ class ProcedureVerifier:
         self.window_sec = window_sec
         self.require_established = require_established
         self.exempt_authorized = exempt_authorized
-        self._now = now_fn
-        self.fsm: Dict[SessionKey, str] = {}
-        self.release_times: Deque[float] = deque()
-        self.events: List[Dict[str, Any]] = []
+        self.store = ProcedureStore("pdu_session", pdu_session_procedure(require_established))
+        self.fsm = FsmCheck(self.store, "release", tool=_RELEASE_TOOL,
+                            exempt_authorized=exempt_authorized)
+        self.rate = RateCheck(RateBucket("pdu_release", max_releases, window_sec, now_fn),
+                              exempt_authorized=exempt_authorized)
 
-    # ------------------------------------------------------------------ #
-    # IN path: before a high-risk tool runs, verify the procedure is legal.
-    # Runs on the DETOKENIZED (real) args, after L1/L2.
-    # ------------------------------------------------------------------ #
-    def screen_call(self, tool_name: str, real_args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if tool_name not in self.HIGH_RISK_SINKS:
+    def describe(self) -> str:
+        return f"verifier({self.fsm.describe()} + {self.rate.describe()})"
+
+    # -- Check interface (used inside the policy pipeline) -----------------
+    def screen(self, ctx: CallContext) -> Optional[Dict[str, Any]]:
+        if ctx.tool not in self.HIGH_RISK_SINKS:
             return None
-        if self.exempt_authorized and self._authorized(real_args):
-            return None
+        return self.fsm.screen(ctx) or self.rate.screen(ctx)
 
-        key = self._key(real_args)
-
-        # (a) FSM / ordering check -------------------------------------
-        state = self.fsm.get(key)
-        if state == _RELEASED:
-            return self._blocked(tool_name, key,
-                f"out-of-state: PDU session {key[1]} of {key[0]} is already RELEASED; "
-                f"a second release is illegal under TS 23.502 §4.3.4",
-                violation="fsm-out-of-state", fsm_state=state)
-        if self.require_established and state != _ACTIVE:
-            return self._blocked(tool_name, key,
-                f"out-of-state: no ACTIVE context observed for PDU session {key[1]} of "
-                f"{key[0]}; release requires an established session (TS 23.502 §4.3.4)",
-                violation="fsm-no-context", fsm_state=state or "UNKNOWN")
-
-        # (b) Rate / volume check --------------------------------------
-        now = self._now()
-        self._prune(now)
-        if len(self.release_times) >= self.max_releases:
-            return self._blocked(tool_name, key,
-                f"rate limit: {len(self.release_times)} release(s) already in the last "
-                f"{self.window_sec:g}s (max {self.max_releases}); refusing bulk PDU-session "
-                f"teardown (control-plane DoS), regardless of authorization",
-                violation="rate-limit",
-                window=self.window_sec, count=len(self.release_times))
-
-        # Allowed — record the attempt for the rate window.
-        self.release_times.append(now)
-        return None
-
-    # ------------------------------------------------------------------ #
-    # OUT path: learn procedure state from results already flowing through.
-    # Runs on the RAW result (pre-tokenize), so SUPIs/ids are real.
-    # ------------------------------------------------------------------ #
-    def observe_result(self, tool_name: str, result: Dict[str, Any]) -> None:
+    def observe(self, tool: str, args: Dict[str, Any], result: Dict[str, Any]) -> None:
         if not isinstance(result, dict):
             return
-        if tool_name == "query_subscriber_session" and result.get("status") == "ok":
-            sub = result.get("subscriber", {}) or {}
-            supi = sub.get("supi")
-            for ps in sub.get("pdu_sessions", []) or []:
-                k = (supi, ps.get("id"))
-                # don't resurrect a session we already know is released
-                if self.fsm.get(k) != _RELEASED:
-                    self.fsm[k] = _ACTIVE
-        elif tool_name in self.HIGH_RISK_SINKS and result.get("status") == "ok" \
-                and result.get("verified") is True:
-            k = (result.get("supi"), result.get("pdu_session_id"))
-            self.fsm[k] = _RELEASED
-            logger.info("[GW:L3] FSM: %s PSI %s -> RELEASED", k[0], k[1])
+        self.store.observe(tool, result)
+        self.fsm.observe(tool, args, result)
 
-    # ------------------------------------------------------------------ #
-    @staticmethod
-    def _authorized(args: Dict[str, Any]) -> bool:
-        return bool(args.get("operator_authorization") or args.get("authorized"))
+    # -- original standalone API ------------------------------------------
+    def screen_call(self, tool_name: str, real_args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self.screen(CallContext(tool_name, real_args, real_args))
 
-    @staticmethod
-    def _key(args: Dict[str, Any]) -> SessionKey:
-        supi = args.get("supi_token") or args.get("supi") or args.get("imsi")
-        return (supi, args.get("pdu_session_id"))
+    def observe_result(self, tool_name: str, result: Dict[str, Any]) -> None:
+        """Without the call's args, key a confirmed release by its result fields."""
+        r = result if isinstance(result, dict) else {}
+        self.observe(tool_name, {"supi": r.get("supi"), "pdu_session_id": r.get("pdu_session_id")}, r)
 
-    def _prune(self, now: float) -> None:
-        cutoff = now - self.window_sec
-        while self.release_times and self.release_times[0] < cutoff:
-            self.release_times.popleft()
-
-    def _blocked(self, tool_name: str, key: SessionKey, reason: str,
-                 violation: str = "", **extra: Any) -> Dict[str, Any]:
-        block = {"status": "blocked", "layer": "L3", "tool": tool_name,
-                 "reason": reason, "violation": violation,
-                 "supi": key[0], "pdu_session_id": key[1]}
-        block.update(extra)
-        self.events.append({"tool": tool_name, "violation": violation, "key": key})
-        return block
-
-    # ------------------------------------------------------------------ #
     def state(self) -> Dict[str, Any]:
-        return {"fsm": {f"{k[0]}#{k[1]}": v for k, v in self.fsm.items()},
-                "releases_in_window": len(self.release_times),
+        return {"fsm": self.store.snapshot(),
+                "releases_in_window": self.rate.bucket.count(),
                 "max_releases": self.max_releases, "window_sec": self.window_sec}
 
     def explain(self) -> str:
-        if not self.fsm and not self.release_times:
+        snap = self.store.snapshot()
+        n = self.rate.bucket.count()
+        if not snap and not n:
             return "L3: no PDU-session procedure state observed yet"
-        active = sorted(f"{k[0]}#{k[1]}" for k, v in self.fsm.items() if v == _ACTIVE)
-        released = sorted(f"{k[0]}#{k[1]}" for k, v in self.fsm.items() if v == _RELEASED)
+        active = sorted(k for k, v in snap.items() if v == "ACTIVE")
+        released = sorted(k for k, v in snap.items() if v == "RELEASED")
         return (f"L3 procedure state — ACTIVE: {active or '[]'}; RELEASED: {released or '[]'}; "
-                f"{len(self.release_times)}/{self.max_releases} releases in last {self.window_sec:g}s")
+                f"{n}/{self.max_releases} releases in last {self.window_sec:g}s")
