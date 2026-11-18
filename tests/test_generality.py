@@ -197,6 +197,219 @@ def test_two_tools_can_share_or_separate_budgets_by_config():
                      {"supi_token": toks[1]})["violation"] == "rate-limit"
 
 
+# =========================================================================== #
+# STAGE 2 — CROSS-PROCEDURE GENERALITY: the fsm/rate machinery has no built-in
+# knowledge of PDU sessions. The same PolicyEngine enforces any procedure that
+# is *declared as data*, including one with nothing to do with 5G.
+# =========================================================================== #
+
+# --- 2a. A deliberately NON-5G procedure: a door lock --------------------- #
+# If the gateway can enforce this with the same code that enforces PDU release,
+# then nothing in that code is PDU-specific. This is the decisive anti-
+# "hard-coded" proof.
+class DoorPanel:
+    def __init__(self, doors=("front", "back", "side", "garage")):
+        self.state = {d: "LOCKED" for d in doors}
+        self.calls = []
+
+    def tools(self):
+        def read_doors(**_):
+            self.calls.append("read_doors")
+            return {"status": "ok",
+                    "doors": [{"id": d, "state": s} for d, s in sorted(self.state.items())]}
+
+        def unlock_door(door_id=None, **_):
+            self.calls.append("unlock_door")
+            self.state[door_id] = "UNLOCKED"
+            return {"status": "ok", "door_id": door_id}
+
+        def lock_door(door_id=None, **_):
+            self.calls.append("lock_door")
+            self.state[door_id] = "LOCKED"
+            return {"status": "ok", "door_id": door_id}
+
+        return {f.__name__: f for f in (read_doors, unlock_door, lock_door)}
+
+    def count(self, tool):
+        return sum(1 for t in self.calls if t == tool)
+
+
+def _door_policy():
+    return {
+        "procedures": {
+            "door_lock": {
+                "key": ["door_id"],
+                "initial": "UNKNOWN",
+                "states": ["UNKNOWN", "LOCKED", "UNLOCKED"],
+                "observe": [{"tool": "read_doors", "when": {"status": "ok"},
+                             "for_each": "doors", "key": ["item.id"],
+                             "set": "LOCKED", "keep": ["UNLOCKED"]}],
+                "transitions": {
+                    "unlock": {"from": ["LOCKED"], "to": "UNLOCKED", "commit_when": {"status": "ok"}},
+                    "lock": {"from": ["UNLOCKED"], "to": "LOCKED", "commit_when": {"status": "ok"}},
+                },
+            }
+        },
+        "tools": {
+            "*": {"checks": []},
+            "unlock_door": {"checks": [
+                {"fsm": {"procedure": "door_lock", "event": "unlock"}},
+                {"rate": {"bucket": "door_unlock", "max": 2, "window_sec": 60}}]},
+            "lock_door": {"checks": [{"fsm": {"procedure": "door_lock", "event": "lock"}}]},
+        },
+    }
+
+
+def _door_gw(panel):
+    # No identifiers here at all -> L1 tokenizer and L2 taint are meaningless and
+    # off. Only the L3 procedure machinery runs, on a domain it has never seen.
+    return GatewayToolClient(LocalToolClient(panel.tools()), policy=_door_policy(),
+                             enable_tokenizer=False, enable_taint=False)
+
+
+def test_foreign_procedure_fsm_enforced_by_same_engine():
+    """unlock is legal only from LOCKED. The gateway refuses it before any
+    context is known, learns LOCKED by observing read_doors, then allows exactly
+    one unlock and refuses the out-of-state repeat — all via door_lock declared
+    as data, with the identical FsmCheck that guards PDU release."""
+    panel = DoorPanel()
+    gw = _door_gw(panel)
+
+    # no context observed yet -> UNKNOWN, unlock requires LOCKED
+    out = gw.invoke("unlock_door", {"door_id": "front"})
+    assert out["status"] == "blocked" and out["violation"] == "fsm-no-context", out
+    assert panel.count("unlock_door") == 0
+
+    gw.invoke("read_doors", {})                       # observe -> every door LOCKED
+    out = gw.invoke("unlock_door", {"door_id": "front"})
+    assert out["status"] == "ok", out                 # LOCKED -> UNLOCKED committed
+
+    out = gw.invoke("unlock_door", {"door_id": "front"})
+    assert out["violation"] == "fsm-out-of-state", out  # UNLOCKED, cannot unlock again
+    assert panel.count("unlock_door") == 1
+
+
+def test_foreign_procedure_rate_cap_by_same_engine():
+    """The same RateCheck that bounds a PDU-release blast radius bounds a bulk
+    door-unlock. Nothing about rate limiting is 5G-specific."""
+    panel = DoorPanel(doors=("d1", "d2", "d3", "d4", "d5"))
+    gw = _door_gw(panel)
+    gw.invoke("read_doors", {})                       # all LOCKED
+    outs = [gw.invoke("unlock_door", {"door_id": d}) for d in ("d1", "d2", "d3", "d4", "d5")]
+    assert [o["status"] for o in outs].count("ok") == 2, outs
+    assert all(o["violation"] == "rate-limit" for o in outs[2:]), outs
+    assert panel.count("unlock_door") == 2
+
+
+def test_foreign_procedure_full_cycle_lock_unlock():
+    """Both transitions of the foreign procedure compose: unlock then lock then
+    unlock again, each gated by its own FsmCheck event."""
+    panel = DoorPanel(doors=("gate",))
+    gw = _door_gw(panel)
+    gw.invoke("read_doors", {})
+    assert gw.invoke("unlock_door", {"door_id": "gate"})["status"] == "ok"
+    assert gw.invoke("lock_door", {"door_id": "gate"})["status"] == "ok"
+    assert gw.invoke("unlock_door", {"door_id": "gate"})["status"] == "ok"
+    # locking an already-locked (just unlocked->locked) ... now UNLOCKED again:
+    assert gw.invoke("unlock_door", {"door_id": "gate"})["violation"] == "fsm-out-of-state"
+
+
+# --- 2b. A SECOND, on-theme 3GPP procedure: UE registration --------------- #
+# Distinct from the PDU-session life-cycle (different states, different tool),
+# so "procedure-aware" is shown on more than one real 5G procedure — the answer
+# to "one procedure just looks like a rate limit" (advisor B1).
+class RegCore:
+    def __init__(self, n=4):
+        self.registered = {f"{S_PREFIX}{i}": True for i in range(1, n + 1)}
+        self.calls = []
+
+    def tools(self):
+        def list_subscribers(**_):
+            return {"status": "ok",
+                    "subscribers": [{"ueId": s} for s in sorted(self.registered)]}
+
+        def query_registration(supi_token=None, **_):
+            self.calls.append("query_registration")
+            reg = self.registered.get(supi_token)
+            if reg is None:
+                return {"status": "error", "error": "unknown"}
+            return {"status": "ok", "subscriber": {
+                "supi": supi_token, "registration": "REGISTERED" if reg else "DEREGISTERED"}}
+
+        def trigger_ue_deregistration(supi_token=None, **_):
+            self.calls.append("trigger_ue_deregistration")
+            if self.registered.get(supi_token):
+                self.registered[supi_token] = False
+                return {"status": "ok", "verified": True, "supi": supi_token}
+            return {"status": "noop", "verified": False, "supi": supi_token}
+
+        return {f.__name__: f for f in
+                (list_subscribers, query_registration, trigger_ue_deregistration)}
+
+    def count(self, tool):
+        return sum(1 for t in self.calls if t == tool)
+
+
+def _reg_policy():
+    return {
+        "identifier_params": ["supi_token", "supi", "imsi"],
+        "procedures": {
+            "ue_registration": {
+                "key": ["supi_token|supi|imsi"],
+                "initial": "UNKNOWN",
+                "states": ["UNKNOWN", "REGISTERED", "DEREGISTERED"],
+                "observe": [{"tool": "query_registration", "when": {"status": "ok"},
+                             "key": ["subscriber.supi"], "set": "REGISTERED",
+                             "keep": ["DEREGISTERED"]}],
+                "transitions": {"deregister": {"from": ["REGISTERED"], "to": "DEREGISTERED",
+                                               "commit_when": {"status": "ok", "verified": True}}},
+            }
+        },
+        "tools": {
+            "*": {"checks": ["identifier"]},
+            "trigger_ue_deregistration": {"checks": [
+                "identifier",
+                {"fsm": {"procedure": "ue_registration", "event": "deregister"}},
+                {"rate": {"bucket": "dereg", "max": 2, "window_sec": 60}}]},
+        },
+    }
+
+
+def test_second_5g_procedure_registration_lifecycle():
+    """A different real 3GPP procedure (TS 23.502 registration), different
+    states (REGISTERED/DEREGISTERED) and a different tool — same engine, same
+    check types, declared entirely in config."""
+    core = RegCore()
+    gw = GatewayToolClient(LocalToolClient(core.tools()), policy=_reg_policy(),
+                           enable_taint=False)
+    tok = gw.invoke("list_subscribers", {})["subscribers"][0]["ueId"]
+
+    # deregister before the gateway has observed the UE registered
+    out = gw.invoke("trigger_ue_deregistration", {"supi_token": tok})
+    assert out["status"] == "blocked" and out["violation"] == "fsm-no-context", out
+
+    gw.invoke("query_registration", {"supi_token": tok})        # observe -> REGISTERED
+    assert gw.invoke("trigger_ue_deregistration", {"supi_token": tok})["status"] == "ok"
+    # double deregistration is out-of-state, exactly like a double PDU release
+    out = gw.invoke("trigger_ue_deregistration", {"supi_token": tok})
+    assert out["violation"] == "fsm-out-of-state", out
+    assert core.count("trigger_ue_deregistration") == 1
+
+
+def test_second_5g_procedure_rate_cap():
+    """Bulk deregistration (a different DoS on a different procedure) is bounded
+    by the same RateCheck."""
+    core = RegCore(n=5)
+    gw = GatewayToolClient(LocalToolClient(core.tools()), policy=_reg_policy(),
+                           enable_taint=False)
+    toks = [s["ueId"] for s in gw.invoke("list_subscribers", {})["subscribers"]]
+    for t in toks:
+        gw.invoke("query_registration", {"supi_token": t})      # observe all REGISTERED
+    outs = [gw.invoke("trigger_ue_deregistration", {"supi_token": t}) for t in toks]
+    assert [o["status"] for o in outs].count("ok") == 2, outs
+    assert all(o["violation"] == "rate-limit" for o in outs[2:]), outs
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
