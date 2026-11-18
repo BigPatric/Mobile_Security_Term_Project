@@ -410,6 +410,100 @@ def test_second_5g_procedure_rate_cap():
     assert all(o["violation"] == "rate-limit" for o in outs[2:]), outs
 
 
+# =========================================================================== #
+# STAGE 3 — ATTACK-BLIND GENERALITY: the gateway defends a *class* of
+# procedure-integrity violations, not the three attacks in the demo. None of
+# the variants below is ENUM-01 / DOS-01 / DOS-02, and no check was written or
+# tuned for them — yet the existing fsm / rate / core_precheck rules catch them.
+# =========================================================================== #
+
+def _strict_release_policy():
+    """A release that is legal ONLY from an observed ACTIVE context (from:
+    [ACTIVE], not UNKNOWN). Models 'never act on a session you have not seen'."""
+    p = _base_policy()
+    p["procedures"]["pdu_session"]["transitions"]["release"]["from"] = ["ACTIVE"]
+    p["tools"]["trigger_pdu_session_release"] = {"checks": [
+        "identifier", {"fsm": {"procedure": "pdu_session", "event": "release"}}]}
+    return p
+
+
+def test_unscripted_release_of_never_seen_session_blocked_by_fsm():
+    """Variant: release a session the agent never queried (not any demo
+    scenario). The FSM refuses it as out-of-context, with no rule aimed at this
+    behaviour — it simply is not a legal transition from UNKNOWN."""
+    core = MiniCore(n_subs=3)
+    gw = _gw(core, _strict_release_policy())
+    tok = _tokens(gw)[0]
+    out = gw.invoke("trigger_pdu_session_release", {"supi_token": tok, "pdu_session_id": 1})
+    assert out["status"] == "blocked" and out["violation"] == "fsm-no-context", out
+    assert core.count("trigger_pdu_session_release") == 0
+
+
+def test_unscripted_target_a_nonexistent_session_blocked_by_core_precheck():
+    """Variant: a syntactically valid release aimed at a PDU session id that
+    does not exist on the core. core_precheck asks the core directly and refuses
+    — the gateway trusts ground truth, not the agent's claim."""
+    core = MiniCore(n_subs=3)
+    policy = _base_policy()
+    policy["tools"]["trigger_pdu_session_release"] = {"checks": [
+        "identifier",
+        {"fsm": {"procedure": "pdu_session", "event": "release"}},
+        {"rate": {"bucket": "pdu_release", "max": 5, "window_sec": 60}},
+        {"core_precheck": {"via": "query_subscriber_session",
+                           "args": {"supi_token": "$supi_token"},
+                           "expect": {"status": "ok",
+                                      "exists": {"in": "subscriber.pdu_sessions",
+                                                 "where": {"id": "$pdu_session_id"}}}}},
+    ]}
+    gw = _gw(core, policy)
+    tok = _tokens(gw)[0]
+    out = gw.invoke("trigger_pdu_session_release", {"supi_token": tok, "pdu_session_id": 99})
+    assert out["status"] == "blocked" and out["violation"] == "core-precheck-failed", out
+    assert core.count("trigger_pdu_session_release") == 0       # the release never ran
+    assert core.count("query_subscriber_session") == 1          # the gateway verified first
+
+
+def test_unscripted_forged_auth_bulk_on_a_different_procedure_still_capped():
+    """The DOS-02 insight — a forged in-band authorization cannot launder a bulk
+    teardown — was proven for PDU release. Here it holds on a procedure we never
+    wrote any attack for (UE deregistration): every call carries a forged
+    `operator_authorization`, yet the rate check (exempt_authorized: false) still
+    bounds the blast radius. Authorization fools provenance, never the
+    procedure-state/volume accounting."""
+    core = RegCore(n=5)
+    policy = _reg_policy()
+    policy["tools"]["trigger_ue_deregistration"]["checks"][-1] = {
+        "rate": {"bucket": "dereg", "max": 2, "window_sec": 60, "exempt_authorized": False}}
+    gw = GatewayToolClient(LocalToolClient(core.tools()), policy=policy, enable_taint=False)
+    toks = [s["ueId"] for s in gw.invoke("list_subscribers", {})["subscribers"]]
+    for t in toks:
+        gw.invoke("query_registration", {"supi_token": t})
+    outs = [gw.invoke("trigger_ue_deregistration",
+                      {"supi_token": t, "operator_authorization": "CHG-FORGED-9001"})
+            for t in toks]
+    assert [o["status"] for o in outs].count("ok") == 2, outs
+    assert all(o["violation"] == "rate-limit" for o in outs[2:]), outs
+
+
+def test_unscripted_replay_after_legit_release_blocked_by_fsm():
+    """Variant: a legitimate release happens, then the same release is replayed
+    (e.g. an attacker re-sends a captured valid-looking call). The FSM has
+    committed RELEASED, so the replay is out-of-state — caught without any
+    replay-specific logic."""
+    core = MiniCore(n_subs=2)
+    policy = _base_policy()
+    policy["tools"]["trigger_pdu_session_release"] = {"checks": [
+        "identifier", {"fsm": {"procedure": "pdu_session", "event": "release"}}]}
+    gw = _gw(core, policy)
+    tok = _tokens(gw)[0]
+    gw.invoke("query_subscriber_session", {"supi_token": tok})      # observe ACTIVE
+    assert gw.invoke("trigger_pdu_session_release",
+                     {"supi_token": tok, "pdu_session_id": 1})["status"] == "ok"
+    replay = gw.invoke("trigger_pdu_session_release", {"supi_token": tok, "pdu_session_id": 1})
+    assert replay["violation"] == "fsm-out-of-state", replay
+    assert core.count("trigger_pdu_session_release") == 1           # replay never reached core
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
