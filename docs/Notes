@@ -20,3 +20,8 @@ Remember to refresh
 
 sudo ./force_kill.sh
 sudo killall -9 nr-gnb nr-ue 2>/dev/null
+
+# Test Bed and notes
+
+free5gc 4.1.0 UERANISM 4.2.3?
+No need real llm
