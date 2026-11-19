@@ -2,7 +2,7 @@
 
 **對象:** 評分老師、隊友。
 **更新:** 2026-11-18
-**關聯:** [END_TO_END_FLOW.md](END_TO_END_FLOW.md) · [261118_generality_and_eval_plan.txt](261118_generality_and_eval_plan.txt)
+**關聯:** [../README.md](../README.md) · [DESIGN.md](DESIGN.md) · [END_TO_END_FLOW.md](END_TO_END_FLOW.md) · [RESULTS.md](RESULTS.md)
 **全部證據都是離線、決定性的單元測試:** `python3 tests/test_generality.py`
 (14 個測試;不需 live core、不需 testbed 大小)。
 
@@ -82,7 +82,7 @@ check 是為它寫或調的——但既有的 fsm / rate / core_precheck 規則�
   slow-drip 不被 rate 擋(這是 rate limiting 的本質)。但 FSM 的順序違規是**全擋**
   (double / out-of-state release = 0 通過),兩者互補。
 - 這些是**離線決定性**證明(引擎邏輯 general)。live testbed 的量化 ASR/FP/latency
-  見 [261118_generality_and_eval_plan.txt](261118_generality_and_eval_plan.txt) 的評估計畫。
+  見 [RESULTS.md](RESULTS.md)。
 
 ---
 

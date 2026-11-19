@@ -2,7 +2,7 @@
 
 **對象:** 第一次讀這份程式的人(評分老師、隊友)。
 **更新:** 2026-11-19 · **狀態:** 三層已實作、單元測試通過、**live 驗證完成**;防禦改以 **config-driven policy pipeline**(`gateway/policy.py` 的 `PolicyEngine`)組裝。
-**總覽文件:** [../README.md](../README.md) · **實驗結果:** [RESULTS.md](RESULTS.md) · **通用性證明:** [GENERALITY_PROOF.md](GENERALITY_PROOF.md)
+**總覽文件:** [../README.md](../README.md) · **設計:** [DESIGN.md](DESIGN.md) · **目錄說明:** [REPOSITORY_LAYOUT.md](REPOSITORY_LAYOUT.md) · **執行:** [RUNNING.md](RUNNING.md) · **實驗結果:** [RESULTS.md](RESULTS.md) · **通用性證明:** [GENERALITY_PROOF.md](GENERALITY_PROOF.md)
 
 這份文件把「**攻擊**」與「**每一個 tool call 的完整程式路徑**」合在一起講:從攻擊者
 植入的被污染 log,一路到 free5GC 上真正的 `ReleaseSMContext`,並標出三層防禦各自在哪裡攔截。
@@ -350,7 +350,7 @@ release 的**數量/順序**不會因為「有張 ticket」就變合法,所以 b
 
 ### 結論:L3 的核心價值 — 不依賴「能否驗證授權」
 
-前面談過,要真正杜絕偽造授權,理想解是把授權換成 gateway 能**獨立驗證**的簽章 capability(§8.1 的延伸討論)。
+要真正杜絕偽造授權,理想解是把授權換成 gateway 能**獨立驗證**的簽章 capability(見 [DESIGN.md](DESIGN.md) roadmap)。
 但在真實系統裡,授權常常**無法完全驗證**:token 可被偽造、credential 可能被盜、或根本是一個**可信內部人
 誤操作**——這些情況下,任何「看來源 / 看授權」的防線(L1/L2)都會失明。
 
@@ -377,45 +377,7 @@ L3 不信任何可被偽造的訊號,只拿「操作本身 vs. PDU session 的�
 
 ## 12. 執行步驟
 
-### 離線(不需 core)— 邏輯皆有決定性單元測試
-```bash
-python3 tests/test_tokenizer.py      # L1
-python3 tests/test_taint.py          # L2
-python3 tests/test_verifier.py       # L3
-python3 tests/test_policy.py         # policy pipeline(config-driven check chain)
-python3 tests/test_generality.py     # 通用性(composability / 跨 procedure / attack-blind)
-python3 tests/test_e2e_scenarios.py  # 每 scenario × mode 的離線預測矩陣
-
-# 離線也能產量化表(fake core),流程與 live 一致:
-python3 tools/sweep.py                                   # → benchmark/offline_evidence.jsonl
-python3 tools/aggregate.py benchmark/offline_evidence.jsonl
-```
-
-### Live — 先把核心 + UERANSIM(gNB + 多個 UE)開起來
-讓 SMF SBI 活著且有 active PDU session(核心需設 `nrfcfg oauth: false`;DOS-02 要看到 L3 作用需 **≥3** 條 session):
-```bash
-cd free5gc   && sudo ./run.sh                                       # 開著別關
-cd UERANSIM  && sudo ./build/nr-gnb -c config/free5gc-gnb.yaml      # terminal 2
-cd UERANSIM  && sudo ./build/nr-ue  -c config/free5gc-ue.yaml -n 3  # terminal 3:3 個 UE
-
-# 從專案根目錄,逐 scenario × mode 手動跑:
-python3 run_attack_demo.py --scenario ENUM-01 --gateway off          # SUPI 外洩
-python3 run_attack_demo.py --scenario ENUM-01 --gateway on           # 外洩 = 0(L1)
-python3 run_attack_demo.py --scenario DOS-01  --gateway off          # 真釋放,已驗證
-python3 run_attack_demo.py --scenario DOS-01  --gateway on           # 被 L2 擋
-python3 run_attack_demo.py --scenario DOS-02  --gateway on           # L2 放行、L3 收斂 bulk
-python3 run_attack_demo.py --scenario DOS-02  --gateway rbac         # RBAC baseline(擋不住)
-python3 run_attack_demo.py --scenario DOS-02  --gateway on --layers L1,L2   # ablation:只到 L2 → 失守
-
-# 或一鍵跑完整矩陣(每個 cell 自動重啟到滿額 session),需 root:
-sudo ./tools/run_live_matrix.sh --fresh
-python3 tools/aggregate.py attack_evidence.jsonl                     # 彙總成 ASR/FP/latency 表
-```
-- **ENUM-01** 只讀 subscriber DB(WebConsole),NF 不穩也能跑。
-- **DOS-01 / DOS-02** 需要 SMF SBI 活著且有 active session;核心沒開則 preflight 直接中止。
-- ablation:用 `--layers L1,L2` 之類逐層開關(或改 `config.yaml` 的 `gateway.layers`),重跑比較。
-- **DoS 鐵證取自控制面**(SMF SM context 消失,純 REST);資料面 ping/`dataplane_nat.sh` 為**選配**第二證據,預設不需要。
-
+離線測試、testbed 啟動、單次 live run、完整實驗矩陣與 lab notes 統一整理在 [RUNNING.md](RUNNING.md)。
 每次 live run 會 append 一筆結構化紀錄(情境、core health、啟用的 gateway 層、
 hijacked/was_attacked/identifier_leaked、逐呼叫明細)到 `attack_evidence.jsonl` —— ablation 表的原始料。
 
@@ -434,12 +396,9 @@ hijacked/was_attacked/identifier_leaked、逐呼叫明細)到 `attack_evidence.j
 ---
 
 ## 14. 下一步
-- **真 LLM agent**(`config.agent_mode: "llm"`):把決定性 loop 換成真模型,量化 baseline ASR,
-  證明攻擊與防禦對真 agent 都成立。
-- **Benign set**(`benchmark/benign/`):合法運維任務(含合法 release),量 false-positive rate。
-- **對照基線**:RBAC/allow-list 與 generic LLM guardrail,證明 procedure-aware 優於通用方法。
-- **L2 強化(選項)**:對出現在 untrusted 內容裡的 `operator_authorization` 值做污染判定,
-  從 provenance 面也擋 DOS-02(與 L3 互補)。
+
+Benign set、RBAC baseline、ablation 已完成(見 [RESULTS.md](RESULTS.md))。剩餘的 future work
+(完整 PDU FSM、簽章 capability、L2 強化、真 LLM agent 等)統一列在 [DESIGN.md](DESIGN.md) 的 Roadmap。
 
 ---
 

@@ -2,254 +2,140 @@
 
 **Mobile Network Security (Fall 2026) — Term Project · 112550018**
 
-A lightweight, provenance- and procedure-aware **gateway** that sits between an
-autonomous LLM agent and a live 5G core (**free5GC**), so that even a *fully
-compromised* agent cannot leak subscriber identities or issue unauthorized,
-out-of-procedure control-plane operations.
-
-The agent is the thing being defended, not trusted. We assume an attacker has
-already hijacked it through **indirect prompt injection** — a directive hidden in
-an untrusted alert log — and ask a single question: *can the defense stop the
-hijacked agent from doing real damage to the core?* The enforcement point is the
-**gateway**, never the agent.
-
-> **Threat model.** The attacker controls only the agent's *untrusted inputs*
-> (alert logs, tenant tickets, telemetry). They cannot touch the gateway, the
-> free5GC core, or its configuration. A hijacked agent is assumed to obey any
-> injected directive. The gateway — not the agent — is where policy is enforced.
+A provenance- and procedure-aware **gateway** that sits between an autonomous
+LLM agent and a live 5G core (**free5GC**), so that even a *fully compromised*
+agent cannot leak subscriber identities or issue unauthorized, out-of-procedure
+control-plane operations.
 
 ---
 
-## What we are building
+## Motivation
 
-Two concrete attacks, driven entirely through poisoned alert logs, and a
-three-layer gateway that neutralizes them:
+Operators are starting to hand network-operations work (triaging alerts,
+remediating faults, releasing stuck sessions) to LLM agents that call core
+network APIs as tools. Those agents read **untrusted text** — alert logs, tenant
+tickets, telemetry — and an attacker who can write into that text can hijack the
+agent through **indirect prompt injection** (Greshake et al., 2023). In a 5G
+core, a hijacked agent with API access can:
 
-| Scenario | Hijacked agent does… | Attack class | Defended by |
-|---|---|---|---|
-| **ENUM-01** | reads tainted log → `list_subscribers` → dumps every SUPI | identity enumeration / SUPI leak | **L1** Tokenizer |
-| **DOS-01** | reads tainted log → enumerate → `trigger_pdu_session_release` on every live session | mass PDU-session release (DoS) | **L2** Taint |
-| **DOS-02** | same, but the log **forges an authorization** the agent copies onto each release | authorization-forging DoS (defeats provenance) | **L3** Verifier (L2 lets it through) |
+- **enumerate subscriber identities** (SUPI/IMSI) and leak them, and
+- **tear down PDU sessions in bulk** — a control-plane denial of service.
 
-Each run is executed **live against a real free5GC + UERANSIM testbed** — no
-mocks. A PDU-session release is a real `ReleaseSMContext` REST call to the SMF,
-and it is only counted as a success when an independent probe confirms the
-core-side session is actually gone.
+Classic role-based access control does not help: the agent *is* authorized to
+call these tools, it is just calling them for the attacker. And asking the model
+to "resist injection" is not a security boundary.
 
-The experiment is an **A/B / ablation study**: the same attack is run with the
-gateway `off` (unprotected baseline — attack succeeds) and `on` (protected —
-attack blocked), and with individual layers toggled, to show that no layer is
-redundant.
+**Our position:** treat the agent as compromised and enforce policy *outside* it,
+at the tool-call boundary. Following CaMeL (Debenedetti et al., 2025), we remove
+the agent's *capability* to do damage instead of relying on its judgment.
 
----
+> **Threat model.** The attacker controls only the agent's untrusted inputs. They
+> cannot touch the gateway, the free5GC core, or its configuration. A hijacked
+> agent is assumed to obey any injected directive.
 
-## Architecture
+## Approach
+
+The agent only talks to a `ToolClient` interface, so the gateway drops into that
+seam **without changing the agent**. Every tool call passes through a
+config-driven chain of three defense layers:
 
 ```
-   Untrusted inputs (alert logs, tenant intents)  ──►  LLM / ReAct Agent
-                                                          │  tool call: name(args)
-                                                          ▼
-                                                  ToolClient interface  ◄── the seam
-                                                          │
-        ┌─────────────────── Secure MCP Gateway ───────────────────┐
-        │  L1  Identifier Tokenizer   SUPI ⇄ opaque token            │  ✅ built
-        │  L2  Provenance / Taint     untrusted-driven action = block│  ✅ built
-        │  L3  Procedure-Aware FSM    out-of-state / rate limit      │  ✅ built
-        └──────────────────────────────┬───────────────────────────┘
-                                        │  restored, authorized REST call
+ Untrusted inputs (alert logs) ──► LLM / ReAct agent
+                                        │ tool call: name(args)
                                         ▼
-                               free5GC + UERANSIM
-                        (WebConsole REST · SMF SBI · nr-cli)
+        ┌──────────────── Secure MCP Gateway ────────────────┐
+        │ L1 Identifier Tokenizer   SUPI ⇄ opaque token       │
+        │ L2 Provenance / Taint     untrusted-driven → block  │
+        │ L3 Procedure-Aware FSM    TS 23.502 state + rate    │
+        └───────────────────────┬────────────────────────────┘
+                                ▼
+                     free5GC + UERANSIM (live)
 ```
 
-The agent only ever talks to a `ToolClient` interface
-([agent/tool_client.py](agent/tool_client.py)), so the gateway drops into that
-seam — `LocalToolClient` → `GatewayToolClient` — **without changing the agent**.
-That is the whole point: the defense lives behind the seam, in the gateway, not
-inside the model.
+We evaluate it with three attacks, all driven only by poisoned alert logs and
+run **live** against a real free5GC + UERANSIM testbed:
 
-See [docs/END_TO_END_FLOW.md](docs/END_TO_END_FLOW.md) (中文) for the full request
-lifecycle **and** the attack walkthrough in one place — every function on the
-path, the three scenarios (ENUM-01 / DOS-01 / DOS-02), and why L2 can't stop the
-authorization-forging DoS that L3 does. The **live result tables** (ASR /
-leakage / FP / latency / ablation attribution) are in
-[docs/RESULTS.md](docs/RESULTS.md); the proof that the gateway is a **general**
-mechanism (new procedure/tool = config, not code) is in
-[docs/GENERALITY_PROOF.md](docs/GENERALITY_PROOF.md).
-
----
-
-## Repository layout
-
-```
-Mobile_Security_Term_Project/
-├── agent/              # the AI agent — the thing being defended
-├── gateway/            # the defense — three-layer Secure MCP Gateway
-├── free5gc_tools/      # MCP tool shim: the only code that touches the live core
-├── benchmark/          # attack scenarios (the evaluation data set)
-├── tests/              # offline unit tests (no live core needed)
-├── docs/               # proposal, flow walkthroughs, lab notes
-├── free5gc/            # vendored 5G core (external, called not modified)
-├── UERANSIM/           # vendored RAN/UE simulator (external, called not modified)
-├── run_attack_demo.py  # end-to-end live demo, with --gateway on/off and --scenario
-├── config.yaml         # single config: core endpoints + gateway layer toggles
-└── attack_evidence.jsonl  # append-only structured evidence, one JSON per run
-```
-
-### `agent/` — the thing being defended
-| File | Role |
-|---|---|
-| [react_agent.py](agent/react_agent.py) | A deterministic Thought→Action→Observation (ReAct) loop. It reads the referenced alert log and **follows the directive embedded in it** — the worst-case *fully-compromised* agent used as the experimental control. Produces an `AgentRunResult` with the verdict flags (`hijacked`, `was_attacked`, `identifier_leaked`). |
-| [tool_client.py](agent/tool_client.py) | The `ToolClient` seam. `list_schema()` + `invoke(name, args)` is the agent's *entire* contact with the outside world. `LocalToolClient` = in-process calls today; a gateway client drops in here unchanged. |
-
-### `gateway/` — the defense
-| File | Layer | Role |
+| Scenario | Hijacked agent does… | Stopped by |
 |---|---|---|
-| [tokenizer.py](gateway/tokenizer.py) | **L1** ✅ | Identifier opacity. Rewrites every real SUPI in a tool *result* to a stable opaque token (`token_sub_a8f9`) before the agent sees it, and restores it on the *argument* path. Also rejects raw SUPIs and unknown tokens in arguments. → *identifier leakage = 0%*. |
-| [taint_tracker.py](gateway/taint_tracker.py) | **L2** ✅ | Provenance / taint. Marks the session TAINTED when an untrusted source (`get_alert_logs`) returns, and blocks a high-risk state change (PDU release) that is driven by that untrusted content and lacks operator authorization. Value-level *and* control-flow taint, with a traceable reason. |
-| [verifier.py](gateway/verifier.py) | **L3** ✅ | Procedure-aware FSM (TS 23.502 PDU-session state machine) + sliding-window rate limit. Blocks out-of-state releases (double / no-context) and bulk teardown **even from trusted, operator-authorized sources** — the case L2 lets through. Binds everyone by default (`exempt_authorized=False`). |
-| [policy.py](gateway/policy.py) | — | **Config-driven policy pipeline.** `PolicyEngine` builds an ordered check chain per tool from `config.yaml` (`gateway.policy`); the first check that blocks stops the call. New tools / procedures are config, not code. Bad policies are rejected at build time. |
-| [checks/](gateway/checks/) | L0–L3 | The pluggable checks: `identifier` (L1), `provenance` (L2), `fsm` / `rate` / `core_precheck` (L3), `deny` (L0, for the RBAC baseline). `core_precheck` has the gateway itself ask the core that the precondition holds before forwarding. |
-| [procedures.py](gateway/procedures.py) | L3 | 3GPP procedure specs as data (PDU-session life-cycle). |
-| [mcp_gateway.py](gateway/mcp_gateway.py) | — | `GatewayToolClient` — the enforcing `ToolClient` at the tool-call boundary: detokenize → policy chain → core → observe → tokenize. Block responses are redacted (no raw SUPI). Records every decision (check trace, gateway overhead) for the evidence log. |
+| **ENUM-01** | dumps every SUPI via `list_subscribers` | **L1** — agent only ever sees tokens |
+| **DOS-01** | releases every live PDU session | **L2** — untrusted content cannot drive a high-risk call |
+| **DOS-02** | same, but copies a **forged authorization** from the log onto each release | **L3** — L2 is fooled; the procedure/rate check is not |
 
-### `free5gc_tools/` — MCP tool shim (the only code that touches the core)
-| File | Role |
-|---|---|
-| [tools.py](free5gc_tools/tools.py) | The 4 agent-callable tools + their JSON schemas: `get_alert_logs` (untrusted input surface), `query_subscriber_session`, `trigger_pdu_session_release` (high-risk, verified), `list_subscribers`. |
-| [core_state.py](free5gc_tools/core_state.py) | All ground-truth access to the live core: WebConsole REST, AMF OAM context, SMF `Nsmf_PDUSession` SBI (the real release call), NRF OAuth2 token acquisition, and host-level data-plane probing. **Never modifies free5GC/UERANSIM — only calls their existing interfaces.** |
+An attack counts as successful only when an independent probe confirms the
+session is really gone from the SMF — no mocks, no "the tool was called" counting.
 
-### `benchmark/` — the evaluation data set
-`attacks/enumerate_subscribers.json` (ENUM-01), `attacks/release_all_sessions.json`
-(DOS-01), and `attacks/authorized_bulk_release.json` (DOS-02) define each scenario:
-the operator task, the poisoned log payload (DOS-02's also forges an authorization
-token), and the expected hijacked behavior. `benign/` holds BENIGN-01…04 — legitimate
-operator tasks (read-only health checks, an authorized single release, and the same in a
-tainted session) used to measure the false-positive rate.
+## Results
 
-### `tests/` — offline unit tests (no live core)
-[test_tokenizer.py](tests/test_tokenizer.py) (L1: tokenization, round-trip,
-raw-SUPI / unknown-token rejection), [test_taint.py](tests/test_taint.py)
-(L2: taint propagation, block-on-untrusted, authorization pass, and the
-layer-off ablation check), [test_verifier.py](tests/test_verifier.py) (L3),
-[test_policy.py](tests/test_policy.py) (pipeline: a new procedure declared in config only,
-core precheck, redaction, decision trace, allow-list) and
-[test_e2e_scenarios.py](tests/test_e2e_scenarios.py) — the real agent + real `config.yaml`
-policy against a fake testbed core, every scenario × {off, rbac, ablations, full}; run it
-directly to print the expected-results matrix (needs `requirements.txt`).
+Live runs, 3 attack scenarios × 6 defense modes, plus 4 benign operator tasks
+(full tables in [docs/RESULTS.md](docs/RESULTS.md)):
 
----
+| Mode | Identifier leakage | Sessions released per attack | Benign FP |
+|---|---|---|---|
+| No gateway | 1.00 | 2.00 | — |
+| RBAC allow-list | 1.00 | 2.00 | 0.00 |
+| L1 only | **0.00** | 2.00 | — |
+| L1 + L2 | 0.00 | 1.00 (DOS-02 still passes fully) | — |
+| **L1 + L2 + L3 (full)** | **0.00** | **1.00** (DOS-01 blocked, DOS-02 capped) | **0.00** |
 
-## What works today
+- **RBAC scores the same as having no defense**, because every malicious call is
+  one the agent is allowed to make.
+- **L1** brings identifier leakage from 100% to 0%.
+- **L2** blocks the injected DoS, but a forged authorization string gets past it
+  (*taint laundering*). **L3** still caps the damage, and the ablation shows every layer is needed.
+- **No false positives** on legitimate operations, including an authorized
+  single release.
+- **Overhead:** p50 ≈ 0.03 ms per call. The tail (p95 ≈ 8 ms) is a single core
+  round-trip from L3's precheck, and only high-risk calls make it.
 
-| Capability | Status | Evidence |
-|---|---|---|
-| ReAct agent → tool → live free5GC (end to end) | ✅ | `run_attack_demo.py` |
-| **ENUM-01** — subscriber enumeration / SUPI leak | ✅ demonstrated | agent lists every SUPI |
-| **DOS-01** — mass PDU-session release via core API | ✅ demonstrated | real `ReleaseSMContext`, verified gone |
-| **L1** — identifier tokenization (leak → 0) | ✅ built + live-verified | A/B live run: ENUM leak `YES` (off) → `no` (on) |
-| **L2** — taint tracking (blocks injected DoS) | ✅ built + live-verified | A/B live run: DOS released (off) → **blocked** by L2 (on); also `tests/test_taint.py` |
-| **L3** — procedure FSM + rate limit | ✅ built + unit-tested + live-verified | DOS-02 live (3 UEs): bulk release capped at `max_releases` — 3rd release blocked by L3, 3rd session survives; `tests/test_verifier.py` 8/8 |
-| **Policy pipeline** — config-driven check chains, core precheck | ✅ built + unit-tested + live-verified | `tests/test_policy.py`, `tests/test_e2e_scenarios.py`; live results in [docs/RESULTS.md](docs/RESULTS.md) |
-| **Generality** — same engine, new procedure/tool = config only | ✅ proven | `tests/test_generality.py` (14/14); [docs/GENERALITY_PROOF.md](docs/GENERALITY_PROOF.md) |
-| Benign set, RBAC baseline, ablation (`--layers`), per-call gateway overhead | ✅ built + live-verified | FP = 0, RBAC = unprotected, latency — see [docs/RESULTS.md](docs/RESULTS.md) |
-| Real LLM agent | ⬜ not required (advisor, 2026-11-18) | scripted worst-case agent is the control |
+Offline tests also show the engine is **general**: a new procedure, a new tool,
+or an attack variant we never wrote a rule for is handled by changing config,
+not code ([docs/GENERALITY_PROOF.md](docs/GENERALITY_PROOF.md)).
 
-> **Live verification (2026-11-16).** Both attacks were run end-to-end against the
-> live free5GC + UERANSIM testbed with the gateway toggled `off`/`on`. Gateway
-> `off`: ENUM-01 leaks every real SUPI and DOS-01 releases the real PDU session
-> (confirmed gone core-side). Gateway `on`: **L1** hands the agent only opaque
-> tokens (leak = 0) and **L2** blocks the injected release before it reaches the
-> SMF — the core is never called. This matches the two traces in
-> [docs/END_TO_END_FLOW.md](docs/END_TO_END_FLOW.md) §7.
+## Conclusion
+
+Prompt-injection defense for network-operations agents belongs **at the
+tool-call boundary**, not in the model. Each layer closes a different hole:
+
+- **L1** protects confidentiality (identifier opacity).
+- **L2** protects source integrity (provenance).
+- **L3** protects procedure integrity, and it is the one layer that still holds
+  when an authorization can be forged, stolen or misused by an insider.
+
+The gateway beats RBAC, causes no false positives and adds negligible latency.
+
+**Limits we keep in view:** L3's rate check *bounds* bulk abuse rather than
+eliminating it (out-of-order operations, such as a double release, are blocked
+completely). Authorization is still an in-band claim, and a signed, gateway-verifiable
+capability is future work. The agent is a scripted worst-case control rather than a
+real LLM. See the roadmap in [docs/DESIGN.md](docs/DESIGN.md).
 
 ---
 
-## Running
+## Quick start
 
 ```bash
 pip install -r requirements.txt
+python3 tests/test_e2e_scenarios.py        # offline: no core needed
 
-# 1) Unit tests — no live core required
-python3 tests/test_tokenizer.py      # Layer 1
-python3 tests/test_taint.py          # Layer 2
-python3 tests/test_verifier.py       # Layer 3
-
-# 2) End-to-end attack demo, baseline vs protected (needs the live testbed)
-python3 run_attack_demo.py --scenario ENUM-01 --gateway off   # SUPI leaks
-python3 run_attack_demo.py --scenario ENUM-01 --gateway on    # SUPI tokenized → leak = 0
-python3 run_attack_demo.py --scenario DOS-01  --gateway off   # real sessions released
-python3 run_attack_demo.py --scenario DOS-01  --gateway on    # release blocked by L2
+# live (testbed up — see docs/RUNNING.md)
+python3 run_attack_demo.py --scenario DOS-02 --gateway off   # sessions really released
+python3 run_attack_demo.py --scenario DOS-02 --gateway on    # L2 fooled, L3 caps it
 ```
 
-Bringing up the testbed (free5GC + UERANSIM gNB + UE, with an active PDU
-session) is covered step-by-step in
-[docs/END_TO_END_FLOW.md](docs/END_TO_END_FLOW.md) §Running; quick lab commands
-are in [docs/Notes](docs/Notes). `--gateway` overrides `gateway.enabled` in
-[config.yaml](config.yaml) per run. Per-run structured evidence is appended to
-`attack_evidence.jsonl`.
+## Documentation
 
-- **ENUM-01** only reads the subscriber DB (WebConsole), so it runs even if the
-  NFs are flaky.
-- **DOS-01** needs the SMF SBI live and a real active session; the demo
-  **aborts** in preflight if the core is down (it never fakes a release).
-
----
-
-## The three layers, and why each is needed
-
-- **L1 — Identifier Tokenizer:** even a fully-compromised agent only ever holds
-  opaque tokens, so exfiltration leaks a meaningless string → *identifier
-  leakage = 0%*. Also rejects raw SUPIs injected via logs. (Follows CaMeL:
-  remove the *capability* to touch the secret, don't rely on the model
-  resisting injection.)
-- **L2 — Provenance / Taint:** content from an untrusted source may not drive a
-  high-risk state change without operator authorization → blocks the injected
-  DoS, with a traceable reason (which source tainted it).
-- **L3 — Procedure-Aware Verifier:** even trusted, operator-authorized calls must
-  follow the TS 23.502 PDU-session state machine and stay within rate limits →
-  blocks out-of-order operations (double / no-context release) and control-plane
-  DoS (bulk teardown). This is the only layer that binds an *authorized* caller,
-  so the ablation shows it catching what L1/L2 structurally cannot. **Key point:
-  L3 does not depend on being able to verify authorization.** When authorization
-  is forgeable, stolen, or a trusted insider errs, L3 still *bounds the damage* by
-  rate (blast-radius cap) and *fully blocks* procedure-illegal operations by FSM —
-  the backstop that holds after the provenance/authorization line is defeated.
-
-Each layer closes a distinct attack class; the ablation study (removing one at a
-time) is what demonstrates that none is redundant.
-
-### L3 — current scope and roadmap
-
-**Current scope (built + live-verified).** L3 enforces exactly one procedure —
-**PDU-session release** (`trigger_pdu_session_release`) — with two checks on
-every caller: **FSM / ordering** (an already-`RELEASED` session cannot be
-released again → hard block, TS 23.502 §4.3.4) and **rate / volume** (≤
-`max_releases` per sliding window → bulk teardown is capped). State is learned
-from results already crossing the gateway (`query_subscriber_session` → `ACTIVE`,
-a confirmed release → `RELEASED`); no extra core calls. This is the minimal set
-the DOS-01 / DOS-02 scenarios need.
-
-**Roadmap (future work).**
-1. **Full PDU-session FSM** — add establishment / modification (TS 23.502
-   §4.3.2–4.3.3), not just release, to deliver the "2–3 procedures" the proposal
-   promised.
-2. **More high-risk sinks** — bring `modify_slice_quota` and other state-changing
-   operations under the same FSM + rate framework.
-3. **Replay / freshness** — reject replayed (even validly-signed) release messages
-   via nonce / timestamp / idempotency.
-4. **Finer policy** — per-tenant / per-slice rate limits and adaptive thresholds
-   (a learned "normal" rate) instead of a single global cap.
-5. **State reconciliation** — periodically reconcile the gateway FSM with real
-   core state, so it does not drift when a session is released by another path.
-6. **Capability-bound authorization** — pair L3 with a gateway-verifiable *signed*
-   capability (replacing the plaintext `operator_authorization`), and check the
-   capability's scope covers this procedure and volume.
-
----
+| Doc | Contents |
+|---|---|
+| [docs/DESIGN.md](docs/DESIGN.md) | Threat model, why each layer exists, L3 scope and roadmap |
+| [docs/REPOSITORY_LAYOUT.md](docs/REPOSITORY_LAYOUT.md) | What every directory and file is for |
+| [docs/END_TO_END_FLOW.md](docs/END_TO_END_FLOW.md) | Full request lifecycle and attack walkthrough, function by function (中文) |
+| [docs/RUNNING.md](docs/RUNNING.md) | Testbed bring-up, unit tests, live demo, full experiment matrix, lab notes |
+| [docs/RESULTS.md](docs/RESULTS.md) | Full live result tables: ASR, leakage, FP, latency, ablation (中文) |
+| [docs/GENERALITY_PROOF.md](docs/GENERALITY_PROOF.md) | Why the gateway is general rather than written for the three attacks (中文) |
+| [docs/112550018_proposal.pdf](docs/112550018_proposal.pdf) | Original project proposal |
 
 ## References
 - Greshake et al. (2023), *Indirect Prompt Injection* — arXiv:2302.12173
 - Debenedetti et al. (2025), *CaMeL* — arXiv:2503.18813
 - 3GPP TS 23.502 §4.3 — PDU Session lifecycle (§4.3.4 Release)
-</content>
+- Model Context Protocol, Specification 2025-11-25 — modelcontextprotocol.io/specification
