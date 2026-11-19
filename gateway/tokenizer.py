@@ -103,6 +103,18 @@ class IdentifierTokenizer:
         """Return a copy of tool ARGS with all tokens restored to real SUPIs."""
         return self._walk(obj, self.detokenize_text)
 
+    def redact_text(self, text: str) -> str:
+        """Like tokenize_text, but NEVER mints: a SUPI this gateway already
+        tokenized becomes its token; any other SUPI (e.g. one an injected log
+        introduced) is masked. Used for gateway-generated messages such as
+        block reasons, so a block can't hand the agent a fresh valid token."""
+        def sub(m):
+            return self.supi_to_token.get(self._canonical(m.group(1)), "imsi-[REDACTED]")
+        return _SUPI_RE.sub(sub, text)
+
+    def redact(self, obj: Any) -> Any:
+        return self._walk(obj, self.redact_text)
+
     def _walk(self, obj: Any, fn):
         if isinstance(obj, str):
             return fn(obj)

@@ -23,7 +23,7 @@ from gateway.mcp_gateway import GatewayToolClient
 from gateway.verifier import ProcedureVerifier
 
 
-def _build(verifier: ProcedureVerifier, n_sessions: int = 1):
+def _build(verifier: ProcedureVerifier, n_sessions: int = 1, enable_verifier: bool = True):
     """Gateway with ONLY L3 active (L1/L2 off) so we isolate procedure logic.
     `seen` records what actually reached the core."""
     seen = {"release": []}
@@ -47,7 +47,7 @@ def _build(verifier: ProcedureVerifier, n_sessions: int = 1):
                              "query_subscriber_session": fake_query,
                              "trigger_pdu_session_release": fake_release})
     gw = GatewayToolClient(inner, enable_tokenizer=False, enable_taint=False,
-                           verifier=verifier)
+                           enable_verifier=enable_verifier, verifier=verifier)
     return gw, seen
 
 
@@ -130,7 +130,7 @@ def test_strict_requires_established_context():
 
 
 def test_ablation_verifier_off_lets_bulk_through():
-    gw, seen = _build(verifier=None, n_sessions=5)   # L3 disabled
+    gw, seen = _build(verifier=None, n_sessions=5, enable_verifier=False)   # L3 disabled
     for i in range(1, 6):
         gw.invoke("trigger_pdu_session_release",
                   {"supi_token": f"imsi-20893000000000{i}", "pdu_session_id": 1})

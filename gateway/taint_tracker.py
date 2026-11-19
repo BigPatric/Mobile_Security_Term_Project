@@ -47,7 +47,9 @@ class TaintTracker:
     # State-changing, high-risk sinks that untrusted input must never drive.
     HIGH_RISK_SINKS: Set[str] = {"trigger_pdu_session_release", "modify_slice_quota"}
 
-    def __init__(self) -> None:
+    def __init__(self, untrusted_sources: Optional[Set[str]] = None) -> None:
+        if untrusted_sources is not None:
+            self.UNTRUSTED_SOURCES = set(untrusted_sources)
         self.tainted_active: bool = False
         self.tainted_fingerprints: Set[str] = set()
         self.provenance: List[Dict[str, Any]] = []
@@ -75,9 +77,15 @@ class TaintTracker:
     # Runs on the DETOKENIZED (real) args so value matching sees real SUPIs.
     # ------------------------------------------------------------------ #
     def screen_call(self, tool_name: str, real_args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Standalone use: gate only the built-in HIGH_RISK_SINKS. Inside the
+        policy pipeline, the config decides which tools get check_sink()."""
         if tool_name not in self.HIGH_RISK_SINKS:
             return None
-        if self._authorized(real_args):
+        return self.check_sink(tool_name, real_args)
+
+    def check_sink(self, tool_name: str, real_args: Dict[str, Any],
+                   allow_authorized: bool = True) -> Optional[Dict[str, Any]]:
+        if allow_authorized and self._authorized(real_args):
             logger.info("[GW:L2] high-risk %s permitted — operator authorization present", tool_name)
             return None
 
