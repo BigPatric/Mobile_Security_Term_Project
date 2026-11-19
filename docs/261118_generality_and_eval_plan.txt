@@ -1,0 +1,228 @@
+===========================================================
+通用化設計 + 大規模測資評估計畫
+Secure MCP Gateway for the 5G Core  ·  112550018
+建立:2026-11-18   狀態:草案(對應 policy-pipeline branch)
+關聯文件:END_TO_END_FLOW.md / README.md / 261118_questions_for_advisor_v2.txt
+===========================================================
+
+這份文件回答兩個問題:
+  (1)「general solution」到底是什麼?我們的架構已經做到哪裡、還差什麼?
+  (2) 如何用「定義驗證方法 + 捏造大量測資」把效果量化、而且站得住(不被說成
+      只是為 demo 量身訂做)。
+
+把它當成「剩一個月的工作藍圖」。每一節末尾標【要做】的就是待辦。
+
+
+===========================================================
+0. 一句話總結
+===========================================================
+Gateway 不是「擋那三個攻擊的程式」,而是一個
+  「policy-driven、procedure-aware 的 tool-call 檢查引擎」。
+三個攻擊只是驗證它有效的實驗。要證明它 general,就要讓:
+  - 同一個引擎,只改 config 就能保護「第二個 procedure」;
+  - 同一組 check,能擋「不是我們親手寫死的攻擊變體」;
+  - 用「大量、可控、有 ground-truth 標籤的測資」量出 ASR / FP / latency,
+    而不是靠 3 條手寫 scenario 喊「有效」。
+
+
+===========================================================
+1. 「General」是什麼意思(觀念)
+===========================================================
+
+1.1 核心分離:機制 (mechanism) vs 範例 (instance)
+  ❌ 不通用:程式裡寫「if scenario == DOS-02 and has forged ticket: block」。
+     → 這是把答案 hard-code,老師會說「你只是認得這個攻擊」。
+  ✅ 通用:程式裡只有「任何 tool call 都依序跑它的 check chain,第一個擋下就停」。
+     PDU release 只是第一個套用這條 pipeline 的 tool。
+
+  判準一句話:
+     「要保護一個新 procedure / 新 tool,我需要改 code 嗎?」
+     若答案是「只要改 config.yaml」→ 就是 general。
+
+1.2 我們已經做到的(policy-pipeline branch,不是空話,對應真實檔案)
+  - gateway/checks/base.py:每個 check 只實作 screen() / observe() 兩個方法,
+    而且「哪個 check 套用到哪個 tool」由 config 決定,check 自己不看 tool 名字。
+    → 這就是「general mechanism 而非 PDU-release special case」的程式保證。
+  - gateway/policy.py:PolicyEngine 把宣告式 spec 編成「每個 tool 一條有序 check chain」。
+  - gateway/procedures.py + gateway/checks/fsm.py:3GPP procedure 以「資料」宣告
+    (states / transitions / observe 規則),FsmCheck 是通用狀態機,不綁 PDU。
+  - config.yaml:整條 PDU-release 防線可讀成一串:
+        identifier(L1) → provenance(L2) → fsm(L3) → rate(L3) → core_precheck(L3)
+    第一個擋下的停。關掉某層 = 從每條 chain 移除該層的 check(ablation 靠這個)。
+  結論:架構方向正確。接下來是「證明它真的 general」+「量化它有效」。
+
+1.3 check 的分類(給 ablation / baseline 用)
+    deny          L0   一般 allow-list(給 RBAC baseline;永遠開)
+    identifier    L1   SUPI 不透明化 + 參數必須是 gateway 鑄過的 token
+    provenance    L2   untrusted 驅動的 high-risk 呼叫(無授權時)擋下
+    fsm           L3   procedure 狀態機:非法順序 / 無 context 擋下
+    rate          L3   滑動視窗量限:bulk 收斂成「最多 N 筆」
+    core_precheck L3   gateway 自己向 core 查「這 instance 真的存在嗎」
+
+1.4 L3 為何是「關不掉的底線」(對 general 的關鍵論述)
+  L1 看機密性、L2 看來源。兩者都可被「洗白」:DOS-02 把 untrusted log 裡的
+  字串塞進 operator_authorization,L2 看到 key 存在就放行(taint laundering)。
+  L3 不信任何可偽造的訊號,只拿「操作本身 vs. procedure 的真實狀態 / 速率」對帳。
+  → 授權騙得過 provenance,騙不過 procedure state。
+  這正是 general 的精神:不防「某個攻擊」,而防「某類違反程序完整性的行為」,
+  不管它的來源是偽造授權、被盜 token,還是可信內部人誤操作。
+
+
+===========================================================
+2. 讓它 general 的第一步:加「第二個 procedure」
+===========================================================
+動機:只有 PDU release 一個 procedure,容易被說成「只是個 rate limit」
+     (advisor 問題 B1)。加第二個 procedure 同時殺兩隻鳥:
+       (a) 證明架構 general —— 只改 config 就能保護新 procedure;
+       (b) 讓「procedure-aware」這個賣點有第二個實例背書。
+
+2.1 候選 procedure(挑能用現有 tool 觀測到狀態的)
+  - pdu_session.establishment:release 的對偶。
+      transitions: establish: {from: [UNKNOWN, RELEASED], to: ACTIVE}
+      可擋:對「已 ACTIVE 的 session 重複建立」/ 異常爆量建立(資源耗盡 DoS)。
+  - slice_quota.modification(modify_slice_quota 這個 high-risk sink 已存在):
+      用 rate + 一個「單次變動幅度上限」的 check 擋「把配額一次調到 0 / 爆高」。
+  建議先做 establishment:和 release 共用同一個 pdu_session 狀態機,最省力、
+  且能展示「同一個 procedure 的多個 transition 由不同 FsmCheck 各守一個 event」。
+
+2.2 關鍵:全程不改 gateway/ 下的邏輯 code
+  只動:config.yaml 的 procedures.pdu_session.transitions 加 establish、
+       tools 下對應 tool 加一條 fsm/rate chain。
+  如果中途發現「非改 code 不可」,那就是找到架構不夠 general 的地方 —— 把它
+  抽象化(例如 FsmCheck 多支援一種條件),這本身就是論文裡值得寫的一段。
+  【要做 P1】加第二個 procedure(establishment),驗證 config-only。
+  【要做 P1】寫一個 test(對照 tests/test_policy.py),證明新 procedure 的
+            合法呼叫過、非法順序被擋 —— 決定性、不靠 testbed。
+
+
+===========================================================
+3. 核心方法:定義「驗證方法」+ 捏造大量測資
+===========================================================
+這一節是你提的想法的展開,也是這份計畫最有深度的部分。
+
+3.1 什麼叫「定義驗證方法」
+  對每個 procedure,用「資料」把它的『合法性規則』寫清楚(我們已有 fsm.py 的格式):
+    - 狀態空間:UNKNOWN / ACTIVE / RELEASED …
+    - 合法 transition:release 只能從 ACTIVE(或 UNKNOWN);establish 只能到 ACTIVE…
+    - 速率上限:視窗內最多 N 筆。
+    - 存在性:core_precheck 向 core 查這個 instance 真的在。
+  「驗證方法」= 這組規則。gateway 的工作就是拿每個 tool call 去對帳這組規則。
+  重點:規則是「3GPP 程序怎樣才合法」,不是「攻擊長怎樣」。這是 general 的根。
+
+3.2 為什麼要「大量測資」而不是 3 條手寫 scenario
+  3 條 scenario 無法支撐統計宣稱(ASR / FP / latency 都只是個案)。
+  更糟的是會被質疑「你只測了自己設計的攻擊」。
+  解法:做一個「合成 workload 產生器」,沿『受控維度』批量產生 trace,每條 trace
+  自帶 ground-truth 標籤。數字才有意義,也擋得住「cherry-picking」的質疑。
+
+3.3 測資的受控維度(generator 的輸入空間)
+  D1 procedure           : pdu_release / pdu_establish / slice_modify …
+  D2 intent(ground truth): benign / malicious
+  D3 攻擊類別(malicious 時):
+       - enumeration        (列舉 SUPI,對應 L1)
+       - bulk-taint         (讀毒 log → 無授權爆量 release,對應 L2 / DOS-01)
+       - forged-auth-bulk   (偽造授權爆量 release,對應 L3 / DOS-02)
+       - out-of-state       (release 一個已 RELEASED / 從未 ACTIVE 的 session,對應 FSM)
+       - slow-drip          (刻意壓在 rate 視窗邊緣的慢速濫用 ← 我們沒親手寫過,用來測 general)
+       - replay / reorder   (把合法序列打亂順序重放)
+  D4 規模               : 訂閱數 / session 數 / burst 大小(3、10、50、…)
+  D5 授權型態           : none / genuine(未來:out-of-band 可驗證)/ forged(in-band 來自毒 log)
+  D6 雜訊               : 在惡意序列中穿插合法運維,打亂順序,測誤擋與漏擋
+
+3.4 ground-truth 標籤(oracle):測資怎麼自帶「正確答案」
+  每條 trace 的每個 tool call 都附一個 oracle 欄位:
+     { "should_block": true/false, "reason": "...", "layer_expected": "L2|L3|..." }
+  規則(由 3GPP 合法性決定,與 gateway 的實作獨立 —— 見 3.6):
+     - benign trace:每個 call 的 should_block = false(全都該過)。
+     - malicious trace:只有「真正越界」的那幾個 call should_block = true,
+       其餘(例如爆量攻擊裡前 N 筆在 rate cap 內的)照 3GPP 其實仍合法 → false。
+  有了逐 call 的 oracle,就能算:
+     ASR  = (gateway on 時)惡意 trace 中仍打進 core 並造成實害的比例
+     FP   = benign call 中被誤擋的比例
+     Recall/Precision(逐 check):每層實際抓到 vs 該抓的
+     Latency = 每個 call 的 gateway_overhead_ms(已在 mcp_gateway.py 量測)
+
+3.5 產生器的輸出格式(沿用現有 benchmark 結構)
+  - 攻擊 trace    → benchmark/attacks/generated/*.json(與現有手寫的同格式)
+  - 合法 trace    → benchmark/benign/generated/*.json
+  - 每個檔含:scenario_id、category、procedure、attack_class、scale、authz_type、
+             task 描述、注入的 log(若有)、以及逐 call 的 oracle 標籤。
+  好處:run_attack_demo.py 已能從 benchmark/{attacks,benign} 自動發現 scenario,
+       產生器只是「多寫一些同格式的檔」,不需改跑的程式。
+
+3.6 方法論鐵律(這幾條決定評估站不站得住,務必寫進報告 limitation)
+  (a) 產生器不可以知道 gateway 的門檻值(max_releases、視窗秒數…)。
+      產生器只按「3GPP 合法性」產生與標註;gateway 獨立判定。
+      否則就是 circular / 自己考自己,數字無意義。
+  (b) benign set 一定要含『最難分辨』的案例(FP 風險都藏在這):
+      - 單筆合法 release(authorized_single_release,已有)
+      - 讀過 alert 之後的合法 release(alert_informed_authorized_release,已有)
+      - 合法但爆量的維運(例如基地台維護,一次合法釋放很多條)← 這條最會逼出 FP
+  (c) 「攻擊盲測」:刻意產生一批我們沒親手設計、沒調參對付過的攻擊變體
+      (slow-drip、reorder、release 從未 query 過的 session…)。
+      如果這些仍被現有 procedure-aware 規則擋下 → 這才是 general 的硬證據;
+      如果擋不下 → 誠實記錄,當 future work 或補規則(補規則也要是通用規則,不是補 if)。
+  (d) 與 baseline 同語言比較:RBAC(已有 baselines.rbac)、未來的 LLM-guardrail,
+      都走同一套跑法與同一批測資,才是 like-for-like。
+
+
+===========================================================
+4. 要產生的數字 / 圖表(報告最終拿得出手的東西)
+===========================================================
+  表 1  ASR vs 防禦等級:off / RBAC / L1 / L1+L2 / L1+L2+L3(full),逐 attack_class 一列。
+        宣稱:full 把 ASR 壓到最低;且能看出「哪一層負責擋哪一類」。
+  表 2  Ablation:每次只關一層,證明沒有一層多餘(呼應 README 的主張)。
+  表 3  FP rate:benign set 在各防禦等級下的誤擋率(重點看最難的 benign 案例)。
+  表 4  Latency:gateway 每個 tool call 的額外延遲(median / p95),分 allow / block。
+  圖    規模曲線:session 數 3→50,ASR 與 latency 怎麼變(展示 bound-the-blast-radius)。
+  表 5  跨 procedure:同一套 check 在 pdu_release 與 pdu_establish 上的效果並列
+        → 這張表就是「general」的視覺證據。
+
+
+===========================================================
+5. 需要建的東西(deliverables)
+===========================================================
+  benchmark/generator.py        合成 workload 產生器(吃維度、吐帶 oracle 的 trace 檔)
+  benchmark/attacks/generated/  產生的攻擊 trace
+  benchmark/benign/generated/   產生的合法 trace(含最難的爆量合法維運)
+  tools/sweep.py (或 run_sweep) 掃「全 scenario × 全 mode(off/rbac/on + 各層 ablation)」,
+                                逐筆 append 到 attack_evidence.jsonl
+  tools/aggregate.py            讀 attack_evidence.jsonl → 算 ASR/FP/Precision/Recall/latency
+                                → 輸出上面那幾張表(markdown / csv)
+  tests/test_generator.py       驗證:產生器的 oracle 標籤本身是對的(抽樣人工核對 + 不變式)
+  docs 更新                      END_TO_END_FLOW.md 從舊的 verifier.screen_call 改成 PolicyEngine 描述
+
+  註:per-call 的 gateway_overhead_ms / core_ms 已在 gateway/mcp_gateway.py._record 量好,
+      aggregate 只要把它從 evidence 撈出來彙總;先確認它有被寫進 evidence JSONL。
+
+
+===========================================================
+6. 建議的工作順序(剩約一個月)
+===========================================================
+  週1  P1  加第二個 procedure(establishment),config-only + 決定性 test。
+          → 先把「general」釘死,風險最高的架構假設先驗證。
+  週1  P0  確認 gateway_overhead_ms 進 evidence;寫 tools/aggregate.py 先把現有 3 條
+          scenario 的 ASR/FP/latency 表自動化(先有流程,再放大測資)。
+  週2  P0  寫 benchmark/generator.py + oracle 標籤 + test_generator.py。
+          先產 benign + bulk/forged-auth,少量(每類 ~20 條)跑通 aggregate。
+  週2  P0  放大測資(規模維度 D4、雜訊 D6),產出表 1~4。
+  週3  P1  攻擊盲測(slow-drip / reorder / 未 query 的 session),產出 general 的硬證據。
+  週3  P2  跨 procedure 表 5;LLM-guardrail baseline(或改以文字論述,視 advisor)。
+  週4      文件收尾(END_TO_END_FLOW 更新、limitation、方法論鐵律 3.6 寫進報告)、
+          live demo 的 testbed 穩定性(≥ cap+1 條 session,advisor C2)。
+
+
+===========================================================
+7. 已知限制(先寫下來,報告直接用)
+===========================================================
+  L1  合成測資不等於真流量;我們宣稱的是「在受控、有 ground-truth 的 workload 下」的效果。
+  L2  rate limit 的本質是 bound-the-blast-radius,不是 0 —— cap 之前那幾筆會過。
+  L3  直打 SMF ReleaseSMContext 只拆 SMF→UPF,UE 端不知情(END_TO_END_FLOW §8.1 已述)。
+  L4  授權目前是 in-band claim,無法被 gateway 獨立驗證;簽章式 capability 列 future work。
+      (這正是 L3 存在的理由:授權驗不了時,仍能用 procedure state 限制損害。)
+  L5  OAuth 關閉(nrfcfg oauth:false):保護 NF 之間的機制與保護 agent→core 正交,
+      簡化在評估上不影響結論(advisor 已口頭同意)。
+
+===========================================================
+(文件結束)
+===========================================================
