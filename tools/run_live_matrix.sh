@@ -31,8 +31,9 @@ PYTHON="${PYTHON:-python3}"
 EVIDENCE="$ROOT/attack_evidence.jsonl"
 
 N_UES="${N_UES:-3}"              # testbed size; L3 rate cap (config max=2) bites when N_UES>2
-REPEATS="${REPEATS:-1}"         # repeats per cell (bump to get latency p50/p95 samples)
-READY_TIMEOUT="${READY_TIMEOUT:-60}"
+REPEATS="${REPEATS:-3}"         # repeats per cell (>=3 so latency p50/p95 have samples)
+READY_TIMEOUT="${READY_TIMEOUT:-90}"   # how long to wait for N sessions to come up
+SETTLE="${SETTLE:-20}"          # extra margin after sessions report active, before the attack
 SMF_HOST="127.0.0.2"; SMF_PORT="8000"
 GNB_CFG="$UERANSIM/config/free5gc-gnb.yaml"
 UE_CFG="$UERANSIM/config/free5gc-ue.yaml"
@@ -99,8 +100,16 @@ bringup() {
   sleep 3
   c "  [3/3] starting $N_UES UE(s)…"
   ( "$UERANSIM/build/nr-ue" -c "$UE_CFG" -n "$N_UES" > "$LOGDIR/ue.log" 2>&1 ) &
-  # wait until the sessions are actually up (the signal the demo gates on)
-  "$PYTHON" "$ROOT/tools/_wait_sessions.py" --need "$N_UES" --timeout "$READY_TIMEOUT"
+  # Wait until the sessions are actually up (the signal the demo gates on).
+  # Non-fatal: if it times out we still settle + attempt, and the demo itself
+  # honestly aborts (exit 2) if the core really is not ready.
+  if "$PYTHON" "$ROOT/tools/_wait_sessions.py" --need "$N_UES" --timeout "$READY_TIMEOUT"; then
+    g "  sessions up; settling ${SETTLE}s before the attack…"
+  else
+    y "  sessions not all up within ${READY_TIMEOUT}s; settling ${SETTLE}s then attempting anyway…"
+  fi
+  sleep "$SETTLE"
+  return 0
 }
 
 run_cell() {                                      # run_cell SCENARIO "extra args"
