@@ -71,7 +71,11 @@ inside the model.
 See [docs/END_TO_END_FLOW.md](docs/END_TO_END_FLOW.md) (中文) for the full request
 lifecycle **and** the attack walkthrough in one place — every function on the
 path, the three scenarios (ENUM-01 / DOS-01 / DOS-02), and why L2 can't stop the
-authorization-forging DoS that L3 does.
+authorization-forging DoS that L3 does. The **live result tables** (ASR /
+leakage / FP / latency / ablation attribution) are in
+[docs/RESULTS.md](docs/RESULTS.md); the proof that the gateway is a **general**
+mechanism (new procedure/tool = config, not code) is in
+[docs/GENERALITY_PROOF.md](docs/GENERALITY_PROOF.md).
 
 ---
 
@@ -146,8 +150,9 @@ directly to print the expected-results matrix (needs `requirements.txt`).
 | **L1** — identifier tokenization (leak → 0) | ✅ built + live-verified | A/B live run: ENUM leak `YES` (off) → `no` (on) |
 | **L2** — taint tracking (blocks injected DoS) | ✅ built + live-verified | A/B live run: DOS released (off) → **blocked** by L2 (on); also `tests/test_taint.py` |
 | **L3** — procedure FSM + rate limit | ✅ built + unit-tested + live-verified | DOS-02 live (3 UEs): bulk release capped at `max_releases` — 3rd release blocked by L3, 3rd session survives; `tests/test_verifier.py` 8/8 |
-| **Policy pipeline** — config-driven check chains, core precheck | ✅ built + unit-tested | `tests/test_policy.py`, `tests/test_e2e_scenarios.py`; live: ⬜ pending |
-| Benign set, RBAC baseline, ablation (`--layers`), per-call gateway overhead | ✅ built, offline-verified | `run_attack_demo.py --scenario BENIGN-0x / --gateway rbac / --layers`; live: ⬜ pending |
+| **Policy pipeline** — config-driven check chains, core precheck | ✅ built + unit-tested + live-verified | `tests/test_policy.py`, `tests/test_e2e_scenarios.py`; live results in [docs/RESULTS.md](docs/RESULTS.md) |
+| **Generality** — same engine, new procedure/tool = config only | ✅ proven | `tests/test_generality.py` (14/14); [docs/GENERALITY_PROOF.md](docs/GENERALITY_PROOF.md) |
+| Benign set, RBAC baseline, ablation (`--layers`), per-call gateway overhead | ✅ built + live-verified | FP = 0, RBAC = unprotected, latency — see [docs/RESULTS.md](docs/RESULTS.md) |
 | Real LLM agent | ⬜ not required (advisor, 2026-11-18) | scripted worst-case agent is the control |
 
 > **Live verification (2026-11-16).** Both attacks were run end-to-end against the
