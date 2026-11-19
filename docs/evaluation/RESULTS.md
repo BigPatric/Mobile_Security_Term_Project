@@ -1,69 +1,75 @@
-# 實驗結果 — Secure MCP Gateway for the 5G Core
+# Results — Secure MCP Gateway for the 5G Core
 
-**更新:** 2026-11-19
-**資料來源:** live free5GC + UERANSIM run,`attack_evidence.jsonl`,以 [../tools/aggregate.py](../../tools/aggregate.py) 彙總。
-**關聯:** [../README.md](../../README.md) · [END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · 執行方式見 [RUNNING.md](../guides/RUNNING.md)
+**Updated:** 2026-11-19
+**Data source:** live free5GC + UERANSIM runs, `attack_evidence.jsonl`, aggregated with [../tools/aggregate.py](../../tools/aggregate.py).
+**Related:** [../README.md](../../README.md) · [END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · how to run: [RUNNING.md](../guides/RUNNING.md)
 
-所有數字都是 **ground truth**:攻擊「成功」僅當 free5GC 核心端確認 PDU session 真的被拆除
-(SMF SM context 消失),不是「呼叫了工具」就算。復現:
+Every number is **ground truth**: an attack "succeeds" only when the free5GC core confirms the PDU
+session was really torn down (the SMF SM context is gone), not merely because the tool was called.
+To reproduce:
 
 ```bash
-sudo ./tools/run_live_matrix.sh --fresh          # 每個 cell 重啟到滿額 session 再打
-python3 tools/aggregate.py attack_evidence.jsonl # 產出下列表格
+sudo ./tools/run_live_matrix.sh --fresh          # each cell restarts to a full set of sessions, then attacks
+python3 tools/aggregate.py attack_evidence.jsonl # produces the tables below
 ```
 
 ---
 
-## 1. 攻擊有效性(ground truth)
+## 1. Attack effectiveness (ground truth)
 
-3 個攻擊 scenario(ENUM-01 / DOS-01 / DOS-02)× 6 個防禦等級。
+3 attack scenarios (ENUM-01 / DOS-01 / DOS-02) × 6 defense levels.
 
-| mode | ASR | leakage | 平均釋放 session |
+| mode | ASR | leakage | Mean sessions released |
 |---|---|---|---|
-| off(無防禦) | 0.67 | 1.00 | 2.00 |
-| rbac(allow-list baseline) | 0.67 | 1.00 | 2.00 |
-| L1(tokenizer) | 0.67 | **0.00** | 2.00 |
-| L1+L2(+taint) | **0.33** | 0.00 | 1.00 |
-| L1+L3(+verifier) | 0.67 | 0.00 | 1.33 |
-| **L1+L2+L3(full)** | **0.50** | 0.00 | 1.00 |
+| off (no defense) | 0.67 | 1.00 | 2.00 |
+| rbac (allow-list baseline) | 0.67 | 1.00 | 2.00 |
+| L1 (tokenizer) | 0.67 | **0.00** | 2.00 |
+| L1+L2 (+taint) | **0.33** | 0.00 | 1.00 |
+| L1+L3 (+verifier) | 0.67 | 0.00 | 1.33 |
+| **L1+L2+L3 (full)** | **0.50** | 0.00 | 1.00 |
 
-- **ASR** = 所有 attack run 中「核心狀態真的改變」的比例。ENUM-01 是**外洩**攻擊(不改核心狀態),
-  所以它只計入 leakage、不計入 ASR;因此集合含 ENUM-01 時 ASR 上限 < 1。
-- **leakage** = run 中出現 raw SUPI 的比例。
+- **ASR** = fraction of attack runs in which core state really changed. ENUM-01 is an **exfiltration**
+  attack (it does not change core state), so it counts toward leakage, not ASR; with ENUM-01 in the set,
+  the ASR ceiling is below 1.
+- **leakage** = fraction of runs in which a raw SUPI appeared.
 
-### 關鍵讀法
-1. **`off` 與 `rbac` 完全相同** → RBAC 對「有權限樣貌的濫用」毫無作用,證明 proposal 的「優於 RBAC」。
-2. **L1 把 leakage 從 1.00 壓到 0** → 身分不透明化擋下 ENUM-01。
-3. **L1+L2 擋住 DOS-01(ASR↓),但 DOS-02 仍全過** → L2 的 provenance 被偽造授權「洗白」(taint laundering)。
-4. **full 最佳**:DOS-01 由 L2 擋、DOS-02 由 L3 收斂到 rate cap。
+### How to read it
+1. **`off` and `rbac` are identical** → RBAC does nothing against abuse that looks authorized, which
+   backs the proposal's "better than RBAC" claim.
+2. **L1 brings leakage from 1.00 to 0** → identifier opacity stops ENUM-01.
+3. **L1+L2 stops DOS-01 (ASR drops), but DOS-02 still passes fully** → L2's provenance is
+   "laundered" by the forged authorization (taint laundering).
+4. **full is best:** DOS-01 is blocked by L2, DOS-02 is capped by L3's rate limit.
 
 ---
 
-## 2. Ablation 歸因 — 哪一層擋下哪個攻擊
+## 2. Ablation attribution — which layer stops which attack
 
-| mode | DOS-01 擋在 | DOS-02 擋在 |
+| mode | DOS-01 stopped at | DOS-02 stopped at |
 |---|---|---|
-| L1+L2 | **L2** / taint-control-flow | —(擋不住)|
+| L1+L2 | **L2** / taint-control-flow | — (not stopped) |
 | L1+L3 | L3 / rate-limit | L3 / rate-limit |
 | **L1+L2+L3** | **L2** / taint-control-flow | **L3** / rate-limit |
 
-> 這張表就是專案的核心論點:**L1+L2 那列 DOS-02 的「—」證明 provenance 擋不住偽造授權;
-> 唯有 L3(不看授權、只對帳程序狀態與速率)能收斂它。** 兩個攻擊並排,證明每一層都不是多餘的。
+> This table is the project's core argument: **the "—" for DOS-02 in the L1+L2 row shows provenance
+> cannot stop a forged authorization; only L3 (which ignores authorization and reconciles procedure
+> state and rate) can bound it.** Side by side, the two attacks show that no layer is redundant.
 
 ---
 
-## 3. False Positive(benign set,4 條合法運維任務)
+## 3. False positives (benign set, 4 legitimate operations tasks)
 
 | mode | benign runs | FP rate |
 |---|---|---|
 | rbac | 4 | **0.00** |
-| L1+L2+L3(full) | 4 | **0.00** |
+| L1+L2+L3 (full) | 4 | **0.00** |
 
-完整 gateway **不誤擋**任何合法運維(含最難分辨的「合法單筆 release」)→ 兼顧安全與可用性。
+The full gateway **does not block** any legitimate operation (including the hardest one to tell apart,
+an authorized single release), so security does not cost usability.
 
 ---
 
-## 4. 延遲(gateway 對每個 tool call 的額外開銷,ms)
+## 4. Latency (gateway overhead per tool call, ms)
 
 | mode | calls | mean | p50 | p95 | max |
 |---|---|---|---|---|---|
@@ -71,41 +77,46 @@ python3 tools/aggregate.py attack_evidence.jsonl # 產出下列表格
 | L1 | 18 | 0.099 | 0.101 | 0.186 | 0.214 |
 | L1+L2 | 18 | 0.075 | 0.037 | 0.250 | 0.319 |
 | L1+L3 | 18 | 2.884 | 0.109 | 17.941 | 18.502 |
-| L1+L2+L3(full) | 42 | 1.496 | 0.035 | 7.967 | 15.380 |
+| L1+L2+L3 (full) | 42 | 1.496 | 0.035 | 7.967 | 15.380 |
 
-### 關鍵讀法
-- **p50 都是微秒級(0.01–0.1 ms)** → gateway 的純檢查邏輯幾乎零成本。
-- **尾端(p95/max,8–18 ms)全部來自 L3 的 `core_precheck`** —— gateway 主動向 core 查詢
-  ground truth 的那一次真實 round-trip,且只發生在 high-risk 呼叫上。
-- **反直覺但可解釋:L1+L3 比 full 還慢**(mean 2.884 vs 1.496)。因為 full 的 **L2 會在 taint
-  階段就把 DOS-01 擋掉,不必走到 L3 的 core round-trip**;L1+L3 沒有 L2,每個 release 都得查 core,
-  round-trip 更多 → 更慢。→ **提前攔截不只更安全,還順帶降低延遲。**
+### How to read it
+- **p50 is in the tens of microseconds everywhere (0.01–0.1 ms)** → the pure checking logic is nearly free.
+- **The tail (p95/max, 8–18 ms) comes entirely from L3's `core_precheck`**: the one real round-trip in
+  which the gateway asks the core for ground truth, and it happens only on high-risk calls.
+- **Counter-intuitive but explainable: L1+L3 is slower than full** (mean 2.884 vs 1.496). In full,
+  **L2 blocks DOS-01 at the taint stage, before it reaches L3's core round-trip**; L1+L3 has no L2, so
+  every release has to query the core, giving more round-trips and more latency.
+  → **Blocking earlier is not only safer, it also lowers latency.**
 
 ---
 
-## 5. 結論
+## 5. Conclusions
 
-| 宣稱 | 由哪個結果支撐 |
+| Claim | Supported by |
 |---|---|
-| 身分外洩 = 0% | §1 leakage:L1 起即 0 |
-| 擋得住 indirect prompt injection 驅動的 DoS | §1/§2:DOS-01 由 L2 擋 |
-| 擋得住偽造授權的 DoS(provenance 擋不到的) | §2:L1+L2 失守、full 由 L3 收斂 |
-| 每一層都必要(無冗餘) | §2 ablation:關掉任一層都有攻擊漏過 |
-| 優於 RBAC | §1:rbac 與無防禦數字相同 |
-| 不誤擋正常運維 | §3:FP = 0 |
-| 可部署(開銷可接受) | §4:p50 微秒級,尾端為單次 core round-trip |
+| Identifier leakage = 0% | §1 leakage: 0 from L1 on |
+| Stops DoS driven by indirect prompt injection | §1/§2: DOS-01 blocked by L2 |
+| Stops DoS with a forged authorization (which provenance misses) | §2: L1+L2 fails, full bounds it via L3 |
+| Every layer is needed (no redundancy) | §2 ablation: disabling any layer lets an attack through |
+| Better than RBAC | §1: rbac matches no defense |
+| No false blocks on normal operations | §3: FP = 0 |
+| Deployable (acceptable overhead) | §4: p50 in microseconds, tail is a single core round-trip |
 
 ---
 
-## 6. 誠實限制(報告請保留)
+## 6. Limitations / caveats
 
-- **ASR 的 rate 部分是 bound-the-blast-radius,不是 0**:L3 的 cap 之前那幾筆仍會過
-  (§1 L1+L3/full 的「平均釋放 1.0–1.33」即此);**順序違規(double / out-of-state release)
-  則為全擋**,兩者互補。
-- **授權目前是 in-band claim,gateway 無法獨立驗證真偽**;簽章式 capability 列 future work。
-  L3 的價值正是:**授權驗不了時,仍用程序完整性把損害限在上限內**。
-- **資料面(ping)為選配**:DoS 鐵證取自控制面(SMF SM context 消失,純 REST),不需 NAT/ping。
-- **樣本與矩陣**:本輪 `full` 多跑 1 次(run 數 4 vs 3,不影響比例);benign FP 僅在 rbac / full
-  兩等級量測;latency 為單輪 pooled。要更強的統計可用 `tools/run_live_matrix.sh` 設 `REPEATS>=3` 重跑。
-- **OAuth 關閉(nrfcfg oauth:false)**:保護 NF 間與保護 agent→core 正交,不影響本實驗結論。
-- 離線、決定性的邏輯驗證(含 generality)見 [GENERALITY_PROOF.md](GENERALITY_PROOF.md) 與 `tests/`。
+- **The rate part of ASR bounds the blast radius; it is not zero:** the calls before L3's cap still pass
+  (the "mean released 1.0–1.33" for L1+L3 / full in §1). **Ordering violations (double / out-of-state
+  release) are fully blocked**; the two complement each other.
+- **Authorization is currently an in-band claim that the gateway cannot verify independently;**
+  signed capabilities are future work. L3's value is exactly this: **when authorization cannot be
+  verified, procedure integrity still keeps the damage bounded.**
+- **The data plane (ping) is optional:** the DoS proof comes from the control plane (the SMF SM context
+  disappears, plain REST) and needs no NAT or ping.
+- **Sample and matrix:** in this round `full` ran once more than the others (4 runs vs 3; proportions
+  unaffected); benign FP was measured only at the rbac / full levels; latency is pooled from a single
+  round. For stronger statistics, rerun `tools/run_live_matrix.sh` with `REPEATS>=3`.
+- **OAuth is off (`nrfcfg oauth: false`):** protecting NF-to-NF traffic is orthogonal to protecting
+  agent→core calls and does not affect these conclusions.
+- Offline, deterministic logic checks (including generality) are in [GENERALITY_PROOF.md](GENERALITY_PROOF.md) and `tests/`.

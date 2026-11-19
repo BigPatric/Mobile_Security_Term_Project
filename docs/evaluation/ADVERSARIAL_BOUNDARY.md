@@ -1,50 +1,55 @@
-# 自適應攻擊者 — 防禦的邊界分析
+# Adaptive Attackers — Where the Defense Stops Holding
 
-**更新:** 2026-11-19
-**證據:** `python3 tests/test_adversarial.py`(5 個離線、決定性、時間可控的測試,全過)。
-**關聯:** [RESULTS.md](RESULTS.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · [END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md)
+**Updated:** 2026-11-19
+**Evidence:** `python3 tests/test_adversarial.py` (5 offline, deterministic, time-controlled tests; all pass).
+**Related:** [RESULTS.md](RESULTS.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · [END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md)
 
-三個 demo 攻擊都是「現在就做壞事」的一次性攻擊。真實攻擊者會**適應**。這份文件讓攻擊者
-適應(spread、forge、reorder、換 bucket),並**誠實記錄每一種是被擋、還是擋不住** ——
-重點不是「全擋」,而是一條**精確的邊界**。時間用注入的假時鐘模擬,所以「慢速」不需真的等,
-結果決定性。
+The three demo attacks are one-shot "do the damage now" attacks. A real attacker
+**adapts**. This document lets the attacker adapt (spread out, forge, reorder, switch
+buckets) and **records honestly whether each variant is blocked or gets through**.
+The goal is not "block everything" but a **precise boundary**. Time is simulated with
+an injected fake clock, so "slow" attacks need no real waiting and results are deterministic.
 
 ---
 
-## 結果矩陣
+## Result matrix
 
-| 攻擊變體 | 結果 | 被哪個機制決定 | 測試 |
+| Attack variant | Outcome | Decided by | Test |
 |---|---|---|---|
-| 爆量 bulk teardown | ✅ **擋**(收斂到 cap) | L3 rate(bound blast radius) | `test_burst_bulk_is_capped_by_rate` |
-| 偽造授權的爆量 | ✅ **擋** | L3 rate(忽略授權宣稱) | `test_forged_auth_burst_still_capped_by_rate` |
-| double / out-of-state release(慢速) | ✅ **擋**(與時間無關) | L3 FSM 順序 | `test_slow_drip_double_release_still_blocked_by_fsm` |
-| **slow-drip:跨不同 session、拉長到 rate 視窗外** | ❌ **擋不住(residual risk)** | windowed rate 看不到 | `test_slow_drip_across_distinct_sessions_evades_rate` |
-| **分散到不同 rate bucket** | ❌ **擋不住(config 決定)** | 各 bucket 各自預算 | `test_separate_buckets_let_an_attacker_double_the_budget` |
+| Burst bulk teardown | ✅ **Blocked** (capped) | L3 rate (bounds the blast radius) | `test_burst_bulk_is_capped_by_rate` |
+| Burst with forged authorization | ✅ **Blocked** | L3 rate (ignores the authorization claim) | `test_forged_auth_burst_still_capped_by_rate` |
+| Double / out-of-state release (slow) | ✅ **Blocked** (time-independent) | L3 FSM ordering | `test_slow_drip_double_release_still_blocked_by_fsm` |
+| **Slow drip: distinct sessions, spread beyond the rate window** | ❌ **Not blocked (residual risk)** | invisible to a windowed rate | `test_slow_drip_across_distinct_sessions_evades_rate` |
+| **Spread across separate rate buckets** | ❌ **Not blocked (config-dependent)** | each bucket has its own budget | `test_separate_buckets_let_an_attacker_double_the_budget` |
 
 ---
 
-## 結論(可寫進報告 / abstract)
+## Conclusions
 
-1. **Rate limiting 收斂的是「爆量」,不是「持續低速濫用」。**
-   把 release 拉長到視窗外、且每筆都打**不同的、確實 ACTIVE 的 session**,就沒有任何 out-of-state
-   可抓,windowed rate 也看不到 → 全數通過。這是 rate 的**本質上限**,不是 bug。
+1. **Rate limiting bounds bursts, not sustained low-rate abuse.**
+   If releases are spread beyond the window and each one hits a **different, genuinely
+   ACTIVE session**, there is no out-of-state transition to catch and the windowed rate
+   never sees a burst, so every call passes. This is an **inherent limit** of rate limiting, not a bug.
 
-2. **FSM 順序約束與時間無關,不可用 slow-drip 規避。**
-   double / out-of-state release 無論何時發生都非法 → slow-drip 對它無效。
+2. **FSM ordering constraints are time-independent and cannot be evaded by slow drip.**
+   A double / out-of-state release is illegal whenever it happens, so slowing down does not help.
 
-3. **因此防禦的真正下限是「程序狀態一致性(FSM)」,不是速率。**
-   偽造授權騙得過 provenance(L2),騙不過 rate/FSM(L3);slow-drip 規避得了 rate,規避不了 FSM。
-   兩種可規避性正交 —— 這正是「縱深防禦:來源完整性 ⟂ 程序完整性」的實證。
+3. **The real floor of the defense is therefore procedure-state consistency (FSM), not rate.**
+   A forged authorization fools provenance (L2) but not rate/FSM (L3); slow drip evades rate
+   but not FSM. The two evasions are orthogonal, which is direct evidence for defense in depth:
+   **source integrity ⟂ procedure integrity**.
 
-4. **Bucket 粒度是一個明確的 policy 取捨。** 把所有 teardown 類操作綁同一個 bucket 可關掉
-   「分散刷不同 bucket」的洞;分開則不行。這在 config 層一行決定,不是 code 問題。
+4. **Bucket granularity is an explicit policy trade-off.** Putting every teardown-type operation
+   in one bucket closes the "spread across buckets" hole; separate buckets leave it open.
+   This is a one-line config decision, not a code problem.
 
 ---
 
-## Residual risk → future work(誠實列出)
+## Residual risk → future work
 
-- **跨 session 的 slow-drip**:需要一個**累計 / 絕對預算**(例如「每 N 分鐘全域最多釋放 M 條」,
-  或對「短時間內釋放比例異常」做偵測),補 windowed rate 的盲區。
-- **bucket 分散**:把語意相近的 high-risk sink 歸入同一 teardown bucket。
-- 兩者都是在既有 policy pipeline 上**加規則 / 調 config**,不改引擎 —— 與 [GENERALITY_PROOF.md](GENERALITY_PROOF.md) 的論點一致。
-
+- **Cross-session slow drip:** needs a **cumulative / absolute budget** (e.g. "at most M releases
+  per N minutes, globally"), or anomaly detection on the fraction of sessions released in a short
+  period, to cover the blind spot of a windowed rate.
+- **Bucket spreading:** group semantically similar high-risk sinks into the same teardown bucket.
+- Both are **new rules / config changes** on the existing policy pipeline, with no engine change,
+  consistent with the argument in [GENERALITY_PROOF.md](GENERALITY_PROOF.md).

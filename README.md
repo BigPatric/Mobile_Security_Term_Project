@@ -151,13 +151,13 @@ Full index: [docs/README.md](docs/README.md).
 | Category | Doc | Contents |
 |---|---|---|
 | Architecture | [DESIGN.md](docs/architecture/DESIGN.md) | Threat model, why each layer exists, L3 scope and roadmap |
-| | [END_TO_END_FLOW.md](docs/architecture/END_TO_END_FLOW.md) | Full request lifecycle and attack walkthrough, function by function (中文) |
+| | [END_TO_END_FLOW.md](docs/architecture/END_TO_END_FLOW.md) | Full request lifecycle and attack walkthrough, function by function |
 | | [REPOSITORY_LAYOUT.md](docs/architecture/REPOSITORY_LAYOUT.md) | What every directory and file is for |
 | Guides | [RUNNING.md](docs/guides/RUNNING.md) | Testbed bring-up, unit tests, live demo, full experiment matrix, lab notes |
-| Evaluation | [RESULTS.md](docs/evaluation/RESULTS.md) | Live result tables: ASR, leakage, FP, latency, ablation (中文) |
-| | [EVAL_CURVE.md](docs/evaluation/EVAL_CURVE.md) | ASR / FP trade-off curve on synthetic traces (中文) |
-| | [ADVERSARIAL_BOUNDARY.md](docs/evaluation/ADVERSARIAL_BOUNDARY.md) | Adaptive attackers: what is blocked and what is not (中文) |
-| | [GENERALITY_PROOF.md](docs/evaluation/GENERALITY_PROOF.md) | Why the gateway is general rather than written for the three attacks (中文) |
+| Evaluation | [RESULTS.md](docs/evaluation/RESULTS.md) | Live result tables: ASR, leakage, FP, latency, ablation |
+| | [EVAL_CURVE.md](docs/evaluation/EVAL_CURVE.md) | ASR / FP trade-off curve on synthetic traces |
+| | [ADVERSARIAL_BOUNDARY.md](docs/evaluation/ADVERSARIAL_BOUNDARY.md) | Adaptive attackers: what is blocked and what is not |
+| | [GENERALITY_PROOF.md](docs/evaluation/GENERALITY_PROOF.md) | Why the gateway is general rather than written for the three attacks |
 | Proposal | [112550018_proposal.pdf](docs/proposal/112550018_proposal.pdf) | Original project proposal |
 
 ## References
