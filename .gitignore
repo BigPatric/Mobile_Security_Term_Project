@@ -10,3 +10,4 @@ cert/
 attack_evidence.jsonl
 .claude/
 benchmark/offline_evidence.jsonl
+live_logs/
