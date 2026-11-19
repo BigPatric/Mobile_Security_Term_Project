@@ -1,9 +1,8 @@
 # 自適應攻擊者 — 防禦的邊界分析
 
-**對象:** 評分老師、隊友。
 **更新:** 2026-11-19
 **證據:** `python3 tests/test_adversarial.py`(5 個離線、決定性、時間可控的測試,全過)。
-**關聯:** [RESULTS.md](RESULTS.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · [END_TO_END_FLOW.md](END_TO_END_FLOW.md)
+**關聯:** [RESULTS.md](RESULTS.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · [END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md)
 
 三個 demo 攻擊都是「現在就做壞事」的一次性攻擊。真實攻擊者會**適應**。這份文件讓攻擊者
 適應(spread、forge、reorder、換 bucket),並**誠實記錄每一種是被擋、還是擋不住** ——
@@ -49,5 +48,3 @@
 - **bucket 分散**:把語意相近的 high-risk sink 歸入同一 teardown bucket。
 - 兩者都是在既有 policy pipeline 上**加規則 / 調 config**,不改引擎 —— 與 [GENERALITY_PROOF.md](GENERALITY_PROOF.md) 的論點一致。
 
-> 一句話:**本防禦可證明地收斂「爆量」與「亂序」攻擊,並明確界定其對「持續低速 / 分散」攻擊的
-> 邊界;真正關不掉的底線是程序狀態一致性。** 誠實標出邊界,比宣稱「全擋」更有份量。

@@ -1,8 +1,7 @@
 # Generality 證明 — 為什麼這個 gateway 不是「為三個攻擊寫死的程式」
 
-**對象:** 評分老師、隊友。
 **更新:** 2026-11-18
-**關聯:** [../README.md](../README.md) · [DESIGN.md](DESIGN.md) · [END_TO_END_FLOW.md](END_TO_END_FLOW.md) · [RESULTS.md](RESULTS.md)
+**關聯:** [../README.md](../../README.md) · [DESIGN.md](../architecture/DESIGN.md) · [END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md) · [RESULTS.md](RESULTS.md)
 **全部證據都是離線、決定性的單元測試:** `python3 tests/test_generality.py`
 (14 個測試;不需 live core、不需 testbed 大小)。
 
@@ -33,7 +32,7 @@ Gateway 是一個 **policy-driven、procedure-aware 的 tool-call 檢查引擎**
 | `test_same_checks_guard_a_different_tool_by_config_only` | 把 `identifier + rate` 指到一個**讀取** tool(列舉節流)也成立。check code 完全沒提到 tool 名字。 |
 | `test_two_tools_can_share_or_separate_budgets_by_config` | bucket 名稱是 config 字串:同名 → 兩個 tool 共用一個預算;不同名 → 各自獨立。 |
 
-> 程式保證在 [gateway/checks/base.py](../gateway/checks/base.py):
+> 程式保證在 [gateway/checks/base.py](../../gateway/checks/base.py):
 > *「checks never filter by tool name themselves — WHICH checks apply to WHICH
 > tool is decided by the policy config.」*
 

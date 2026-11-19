@@ -5,14 +5,14 @@ tools/eval_curve.py — ASR / FP trade-off curve over the rate cap
 Replays benchmark/generator.py's labelled traces through the REAL PolicyEngine
 (against a deterministic fake core, time injected via a fake clock) at a sweep of
 rate caps, and reports — per cap — the attack effect vs the false-positive rate.
-This is the quantified version of the point results in docs/RESULTS.md: it shows
+This is the quantified version of the point results in docs/evaluation/RESULTS.md: it shows
 the KNEE where tightening the cap starts blocking legitimate bulk maintenance.
 
     python3 tools/eval_curve.py
     python3 tools/eval_curve.py --csv eval_curve      # also writes eval_curve.csv
 
 Isolates L3 (identifier + fsm + rate): L1/L2 are orthogonal and covered by the
-ablation in docs/RESULTS.md. The generator does NOT know the cap — metrics are
+ablation in docs/evaluation/RESULTS.md. The generator does NOT know the cap — metrics are
 measured, not assumed.
 """
 

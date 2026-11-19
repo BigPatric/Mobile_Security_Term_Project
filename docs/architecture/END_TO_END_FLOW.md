@@ -1,8 +1,7 @@
 # 端到端流程與攻擊說明 — Secure MCP Gateway for the 5G Core
 
-**對象:** 第一次讀這份程式的人(評分老師、隊友)。
 **更新:** 2026-11-19 · **狀態:** 三層已實作、單元測試通過、**live 驗證完成**;防禦改以 **config-driven policy pipeline**(`gateway/policy.py` 的 `PolicyEngine`)組裝。
-**總覽文件:** [../README.md](../README.md) · **設計:** [DESIGN.md](DESIGN.md) · **目錄說明:** [REPOSITORY_LAYOUT.md](REPOSITORY_LAYOUT.md) · **執行:** [RUNNING.md](RUNNING.md) · **實驗結果:** [RESULTS.md](RESULTS.md) · **通用性證明:** [GENERALITY_PROOF.md](GENERALITY_PROOF.md)
+**總覽文件:** [../README.md](../../README.md) · **設計:** [DESIGN.md](DESIGN.md) · **目錄說明:** [REPOSITORY_LAYOUT.md](REPOSITORY_LAYOUT.md) · **執行:** [RUNNING.md](../guides/RUNNING.md) · **實驗結果:** [RESULTS.md](../evaluation/RESULTS.md) · **通用性證明:** [GENERALITY_PROOF.md](../evaluation/GENERALITY_PROOF.md)
 
 這份文件把「**攻擊**」與「**每一個 tool call 的完整程式路徑**」合在一起講:從攻擊者
 植入的被污染 log,一路到 free5GC 上真正的 `ReleaseSMContext`,並標出三層防禦各自在哪裡攔截。
@@ -57,16 +56,16 @@ DOS-02 是這個專案最關鍵的情境:它證明 **L3 抓得到 L1/L2 結構�
 
 ## 3. 啟動 — agent 跑之前 `run_attack_demo.py` 做什麼
 
-[`run_attack_demo.py`](../run_attack_demo.py) `main()`:
+[`run_attack_demo.py`](../../run_attack_demo.py) `main()`:
 
-1. **載入 config。** 讀 [`config.yaml`](../config.yaml),把 core endpoints(WebConsole `:5000`、
+1. **載入 config。** 讀 [`config.yaml`](../../config.yaml),把 core endpoints(WebConsole `:5000`、
    SMF SBI `127.0.0.2:8000`、NRF `127.0.0.10:8000`)與 gateway 各層開關推進 tool 層。
 2. **誠實 preflight**(`cs.core_health()`):探測 WebConsole 與 SMF SBI,並檢查受害者
    `imsi-208930000000001` 是否真的有 active PDU session。banner 印 `LIVE`/`DOWN` 都是量到的,不造假。
 3. **Gate。** ENUM-01 只需 WebConsole;DOS-01 / DOS-02 還需要 SMF SBI。缺件就 **exit code 2 中止**
    ——「沒有 live attack 可跑」,絕不印假成功。
 4. **決定 gateway 開關。** `--gateway on/off` 覆寫 `config.gateway.enabled`,這是 A/B 開關。
-5. **在 seam 後面組 tool client**([`run_attack_demo.py`](../run_attack_demo.py) `build_tool_client`),
+5. **在 seam 後面組 tool client**([`run_attack_demo.py`](../../run_attack_demo.py) `build_tool_client`),
    依 config 逐層啟用(L1/L2/L3 各自可開關,供 ablation)。防禦不是寫死的,而是從
    `config.yaml` 的 `gateway.policy` 宣告式規格,由 `PolicyEngine` 編成「每個 tool 一條有序 check chain」:
    ```python
@@ -80,7 +79,7 @@ DOS-02 是這個專案最關鍵的情境:它證明 **L3 抓得到 L1/L2 結構�
    agent = ReActAgent(tool_client=tool_client, scenario_id=args.scenario)
    ```
    `GatewayToolClient` 內部建一個 `PolicyEngine(policy, layers=...)`;關掉某層就把該層的 check
-   從每條 chain 移除。新增 tool / procedure = 改 config,不改 code(見 [GENERALITY_PROOF.md](GENERALITY_PROOF.md))。
+   從每條 chain 移除。新增 tool / procedure = 改 config,不改 code(見 [GENERALITY_PROOF.md](../evaluation/GENERALITY_PROOF.md))。
 6. **跑** `agent.run(task, max_turns)`,印判定,並 append 一筆 JSON 到 `attack_evidence.jsonl`
    (含實際啟用的 `gateway_layers`,作為 ablation 表的原始資料)。
 
@@ -91,7 +90,7 @@ DOS-02 是這個專案最關鍵的情境:它證明 **L3 抓得到 L1/L2 結構�
 
 ## 4. Agent loop — 注入如何生效
 
-[`agent/react_agent.py`](../agent/react_agent.py) `ReActAgent._run_loop()`。loop 是**決定性的**
+[`agent/react_agent.py`](../../agent/react_agent.py) `ReActAgent._run_loop()`。loop 是**決定性的**
 (PoC 不需要真 LLM);它模擬一個**天真的 NOC policy**:讀 alert、服從裡面任何指令 —— 這正是
 indirect prompt injection 利用的洞。
 
@@ -142,7 +141,7 @@ loop 結束後,`run()` 用**真實 tool 結果**算判定旗標:
 
 ## 5. Seam — `ToolClient.invoke`
 
-[`agent/tool_client.py`](../agent/tool_client.py)。契約只有兩個方法:`list_schema()`(工具宣告)
+[`agent/tool_client.py`](../../agent/tool_client.py)。契約只有兩個方法:`list_schema()`(工具宣告)
 和 `invoke(name, args) -> dict`。
 
 - **Gateway OFF** → `LocalToolClient.invoke` 在 `TOOL_REGISTRY` 查名字直接呼叫。無防禦。這是 **baseline**。
@@ -154,8 +153,8 @@ loop 結束後,`run()` 用**真實 tool 結果**算判定旗標:
 
 ## 6. Gateway 內部 — `GatewayToolClient.invoke` + `PolicyEngine`
 
-[`gateway/mcp_gateway.py`](../gateway/mcp_gateway.py) 做邊界的 token 轉換與計時;真正的強制邏輯在
-[`gateway/policy.py`](../gateway/policy.py) 的 `PolicyEngine`。一次呼叫穿越邊界兩次 —— args 往 core 進去,
+[`gateway/mcp_gateway.py`](../../gateway/mcp_gateway.py) 做邊界的 token 轉換與計時;真正的強制邏輯在
+[`gateway/policy.py`](../../gateway/policy.py) 的 `PolicyEngine`。一次呼叫穿越邊界兩次 —— args 往 core 進去,
 result 往 agent 出來:
 
 ```
@@ -165,43 +164,43 @@ agent <--result(tokens)-- [tokenize] <----- [PolicyEngine.observe: taint / FSM �
 
 `PolicyEngine.screen(ctx)` 依序跑該 tool 的 chain(config 定義),**第一個回傳 block 的 check 就停**,
 並記下逐 check 的 pass/block trace(進 evidence)。每個 check 是一個可插拔單元
-([`gateway/checks/`](../gateway/checks/)),**自己不看 tool 名字** —— 哪個 check 套到哪個 tool 由 config 決定。
+([`gateway/checks/`](../../gateway/checks/)),**自己不看 tool 名字** —— 哪個 check 套到哪個 tool 由 config 決定。
 
 ### 6.0 進 — detokenize(`tokenizer.detokenize`,L1 transform)
 args 先遞迴走訪,把每個 `token_sub_xxxx` 還原成真實 SUPI(core 只懂真 identifier)。
 對照表**只存在 gateway 內**,agent 永遠看不到。注意:`identifier` check 跑在**還原前**的 agent 原始 args 上。
 
-### 6.1 `identifier` check(L1)— [`checks/identifier.py`](../gateway/checks/identifier.py)
+### 6.1 `identifier` check(L1)— [`checks/identifier.py`](../../gateway/checks/identifier.py)
 - **Rule A — 任何參數都不得有 raw SUPI。** `contains_raw_supi(val)` → 出現 raw
   `imsi-208930000000001`(或裸 15 碼)就 **擋**(`violation:"raw-identifier"`)。agent 只拿得到
   opaque token,raw SUPI 只可能來自注入內容。
 - **Rule B — identifier 參數必須是有效 token。** `supi_token`/`supi`/`imsi` 的值必須是本 gateway
   鑄造過的 token(`is_known_token`),未知 token 拒絕(`violation:"unknown-token"`)。
 
-### 6.2 `provenance` check(L2)— [`checks/provenance.py`](../gateway/checks/provenance.py)
-薄薄包住 [`taint_tracker.py`](../gateway/taint_tracker.py) 的 `check_sink()`,跑在真實(已 detokenize)args 上:
+### 6.2 `provenance` check(L2)— [`checks/provenance.py`](../../gateway/checks/provenance.py)
+薄薄包住 [`taint_tracker.py`](../../gateway/taint_tracker.py) 的 `check_sink()`,跑在真實(已 detokenize)args 上:
 - 帶 `operator_authorization`/`authorized`(且 `allow_authorized:true`)→ **放行**(真實維運動作要能過,壓低 benign 誤判)。
   **⚠ 這一分支正是 DOS-02 鑽的洞 —— 見 §10。**
 - 否則若某參數值命中**污染指紋**(曾在 untrusted log 出現的 SUPI)→ **擋**(value-level taint)。
 - 否則若 session 已被污染 → **擋**(control-flow taint)。**這是擋下 DOS-01 的地方。**
 
-### 6.3 `fsm` check(L3)— [`checks/fsm.py`](../gateway/checks/fsm.py)
-用 [`procedures.py`](../gateway/procedures.py) 宣告的 PDU-session 狀態機(TS 23.502 §4.3,**資料、非寫死**),
+### 6.3 `fsm` check(L3)— [`checks/fsm.py`](../../gateway/checks/fsm.py)
+用 [`procedures.py`](../../gateway/procedures.py) 宣告的 PDU-session 狀態機(TS 23.502 §4.3,**資料、非寫死**),
 **對所有來源生效(含已授權)** —— 這是 L3 與 L2 的根本差別:
 - 已 `RELEASED` 的 session 再被 release → **擋**(out-of-state);
 - 從未觀測到 `ACTIVE`(strict)→ **擋**(no-context)。
 FSM 狀態從 gateway **已經過的** `query` / `release` 結果學來(§6.6),不額外打 core。
 
-### 6.4 `rate` check(L3)— [`checks/rate.py`](../gateway/checks/rate.py)
+### 6.4 `rate` check(L3)— [`checks/rate.py`](../../gateway/checks/rate.py)
 sliding window 內 release 嘗試超過 `max`(config `rate.max`)→ **擋**(把「release ALL」收斂成「最多 N 筆」,
 bound the blast radius)。`exempt_authorized:false`,所以偽造授權也擋不掉。**這是擋下 DOS-02 的地方。**
 
-### 6.5 `core_precheck` check(L3)— [`checks/core_precheck.py`](../gateway/checks/core_precheck.py)
+### 6.5 `core_precheck` check(L3)— [`checks/core_precheck.py`](../../gateway/checks/core_precheck.py)
 gateway **自己**向 core 查一次「這個 session 真的存在嗎」(不信 agent 片面之詞)。放在 rate 之後,
 所以 bulk 攻擊無法讓 gateway 狂打 core。
 
 ### 6.6 inner call + 出路(observe → tokenize)
-- `result = inner.invoke(name, real_args)` → [`free5gc_tools/tools.py`](../free5gc_tools/tools.py) → live core(§7–8)。
+- `result = inner.invoke(name, real_args)` → [`free5gc_tools/tools.py`](../../free5gc_tools/tools.py) → live core(§7–8)。
 - **`PolicyEngine.observe(tool, args, result)`** 跑在 raw result 上(tokenize 之前):
   - **propagate taint**(`taint.observe_result`):untrusted source(`get_alert_logs`)或 `provenance:UNTRUSTED`
     → session 標 TAINTED,結果裡每個 `imsi-\d{15}` 記成污染指紋。這就是 Step 1 讀毒 log「武裝」Step 2 攔截的原因。
@@ -270,7 +269,7 @@ N1 NAS 訊息送出,UERANSIM 的 `nr-ue` 不會反應:`uesimtun0` 還在、`nr-c
 
 ### 8.2 資料面證據(選配但強力)
 預設沒設 NAT 時,UE 本來就連不出去,所以 DoS 只靠控制面(SMF context 消失)證明。要加**資料面鐵證**
-(攻擊前 ping 通、攻擊後斷),在 UPF 起來後跑 [`../free5gc/dataplane_nat.sh`](../free5gc/dataplane_nat.sh) `up`:
+(攻擊前 ping 通、攻擊後斷),在 UPF 起來後跑 [`tools/dataplane_nat.sh`](../../tools/dataplane_nat.sh) `up`:
 它對 UE 池 `10.60.0.0/16` 在上行介面 `enp2s0` 加 MASQUERADE。之後 `data_plane_probe()` 的
 `ping -I uesimtun0 8.8.8.8` 會從 fail→pass,evidence 裡 `data_plane.up` 自動 `false→true→false`。
 (這是 free5GC 的 data-plane NAT,**不是** VMware 介面卡的 NAT。)
@@ -315,8 +314,8 @@ trigger_pdu_session_release(tok,1, operator_authorization="CHG-20481")
 ## 10. 為什麼 L2 擋不住 DOS-02(本專案的關鍵論點)
 
 L2 的規則是:「untrusted 內容驅動的 high-risk 呼叫,**在沒有 operator authorization 時**才擋。」
-`provenance` check([checks/provenance.py](../gateway/checks/provenance.py))委派給
-[taint_tracker.py](../gateway/taint_tracker.py) 的 `check_sink()`,它第一件事就檢查 `_authorized(args)`:
+`provenance` check([checks/provenance.py](../../gateway/checks/provenance.py))委派給
+[taint_tracker.py](../../gateway/taint_tracker.py) 的 `check_sink()`,它第一件事就檢查 `_authorized(args)`:
 ```python
 if allow_authorized and self._authorized(real_args):   # 只看有沒有 operator_authorization / authorized 這個 key
     return None                                         # 有 → 直接放行
@@ -330,7 +329,7 @@ if allow_authorized and self._authorized(real_args):   # 只看有沒有 operato
 release 的**數量/順序**不會因為「有張 ticket」就變合法,所以 bulk teardown 照擋。
 **授權騙得過 provenance,騙不過 procedure state。**
 
-### Ablation(3 sessions、L3 `max_releases=2`)—— 以下為 **live 實測**(完整數據見 [RESULTS.md](RESULTS.md))
+### Ablation(3 sessions、L3 `max_releases=2`)—— 以下為 **live 實測**(完整數據見 [RESULTS.md](../evaluation/RESULTS.md))
 
 | 設定 | DOS-02 擋在 | sessions 被斷 | 結論 |
 |---|---|---|---|
@@ -340,8 +339,8 @@ release 的**數量/順序**不會因為「有張 ticket」就變合法,所以 b
 | L1+L2+L3(full) | L3 / rate-limit | 2 | ✅ 只有 L3 起作用 |
 
 對照 DOS-01(未偽造授權)L2 就擋下 —— 兩情境並排,正好證明 **L3 抓到 L1/L2 抓不到的**。
-單元測試 [`tests/test_verifier.py`](../tests/test_verifier.py) / [`tests/test_policy.py`](../tests/test_policy.py)
-以決定性方式證明此邏輯(不依賴 testbed 大小);跨 procedure 的通用性見 [GENERALITY_PROOF.md](GENERALITY_PROOF.md)。
+單元測試 [`tests/test_verifier.py`](../../tests/test_verifier.py) / [`tests/test_policy.py`](../../tests/test_policy.py)
+以決定性方式證明此邏輯(不依賴 testbed 大小);跨 procedure 的通用性見 [GENERALITY_PROOF.md](../evaluation/GENERALITY_PROOF.md)。
 
 > **誠實 caveat:** L3 的 rate limit 把「release ALL」收斂成「最多 N 筆」,**不是 0**。cap 之前那幾筆
 > 仍會過 —— 這是 rate-limiting 的本質(bound the blast radius)。要 live demo 看到 L3 作用,testbed 要有
@@ -377,7 +376,7 @@ L3 不信任何可被偽造的訊號,只拿「操作本身 vs. PDU session 的�
 
 ## 12. 執行步驟
 
-離線測試、testbed 啟動、單次 live run、完整實驗矩陣與 lab notes 統一整理在 [RUNNING.md](RUNNING.md)。
+離線測試、testbed 啟動、單次 live run、完整實驗矩陣與 lab notes 統一整理在 [RUNNING.md](../guides/RUNNING.md)。
 每次 live run 會 append 一筆結構化紀錄(情境、core health、啟用的 gateway 層、
 hijacked/was_attacked/identifier_leaked、逐呼叫明細)到 `attack_evidence.jsonl` —— ablation 表的原始料。
 
@@ -397,7 +396,7 @@ hijacked/was_attacked/identifier_leaked、逐呼叫明細)到 `attack_evidence.j
 
 ## 14. 下一步
 
-Benign set、RBAC baseline、ablation 已完成(見 [RESULTS.md](RESULTS.md))。剩餘的 future work
+Benign set、RBAC baseline、ablation 已完成(見 [RESULTS.md](../evaluation/RESULTS.md))。剩餘的 future work
 (完整 PDU FSM、簽章 capability、L2 強化、真 LLM agent 等)統一列在 [DESIGN.md](DESIGN.md) 的 Roadmap。
 
 ---

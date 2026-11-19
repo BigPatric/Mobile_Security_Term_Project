@@ -2,7 +2,6 @@
 *.venv
 __pycache__/
 free5gc/
-UERANISM/
 .vscode/
 bin/
 free5gc/cert/
@@ -11,3 +10,4 @@ attack_evidence.jsonl
 .claude/
 benchmark/offline_evidence.jsonl
 live_logs/
+*.bak

@@ -1,7 +1,7 @@
 # Running — Tests, Live Demo, Full Experiment
 
-Back to the [README](../README.md). The internals of each step are in
-[END_TO_END_FLOW.md](END_TO_END_FLOW.md).
+Back to the [README](../../README.md). The internals of each step are in
+[END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md).
 
 **Testbed:** free5GC v4.1.0 + UERANSIM v3.2.7 (both vendored in this repo).
 Core config needs `nrfcfg oauth: false`, so that the SMF release is a plain REST call.
@@ -59,7 +59,7 @@ python3 run_attack_demo.py --scenario DOS-02  --gateway rbac         # RBAC base
 python3 run_attack_demo.py --scenario DOS-02  --gateway on --layers L1,L2   # ablation
 ```
 
-- `--gateway` overrides `gateway.enabled` in [config.yaml](../config.yaml).
+- `--gateway` overrides `gateway.enabled` in [config.yaml](../../config.yaml).
   `--layers` overrides `gateway.layers`.
 - **ENUM-01** only reads the subscriber DB (WebConsole), so it runs even if other NFs are flaky.
 - **DOS-01 / DOS-02** need the SMF SBI live and a real active session. The demo
@@ -82,7 +82,7 @@ dependencies, set `PYTHON=/path/to/venv/bin/python3`.
 
 The DoS proof comes from the control plane (the SMF SM context disappears). To also
 show the data plane (ping works before the attack and fails after it), run
-`free5gc/dataplane_nat.sh up` after the UPF starts. See [END_TO_END_FLOW.md §8.2](END_TO_END_FLOW.md).
+`sudo ./tools/dataplane_nat.sh up` after the UPF starts. See [END_TO_END_FLOW.md §8.2](../architecture/END_TO_END_FLOW.md).
 
 ---
 

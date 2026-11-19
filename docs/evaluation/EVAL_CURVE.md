@@ -1,12 +1,11 @@
 # 量化評估 — ASR / FP 取捨曲線(合成測資)
 
-**對象:** 評分老師、隊友。
 **更新:** 2026-11-19
-**產生:** `python3 tools/eval_curve.py`;測資 [../benchmark/generator.py](../benchmark/generator.py);harness 自我檢查 `python3 tests/test_generator.py`(5/5 過)。
+**產生:** `python3 tools/eval_curve.py`;測資 [../benchmark/generator.py](../../benchmark/generator.py);harness 自我檢查 `python3 tests/test_generator.py`(5/5 過)。
 **關聯:** [RESULTS.md](RESULTS.md)(live 單點)· [ADVERSARIAL_BOUNDARY.md](ADVERSARIAL_BOUNDARY.md)(邊界)
 
-把 ASR / FP 從「三個手寫個案」升級成「掃一條曲線」。[generator.py](../benchmark/generator.py) 產出
-16 條帶 **intent 標籤** 的 trace(善/惡、含最難的「合法大量維運」),[eval_curve.py](../tools/eval_curve.py)
+把 ASR / FP 從「三個手寫個案」升級成「掃一條曲線」。[generator.py](../../benchmark/generator.py) 產出
+16 條帶 **intent 標籤** 的 trace(善/惡、含最難的「合法大量維運」),[eval_curve.py](../../tools/eval_curve.py)
 把每條 trace 用**真實 PolicyEngine** 對假核心重放,在一串 rate cap 上量「攻擊效果 vs 誤擋」。
 **產生器不知道 gateway 的門檻值** —— 指標是量出來的,不是假設的(評估不自己考自己)。
 
