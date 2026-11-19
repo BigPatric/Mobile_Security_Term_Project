@@ -1,8 +1,8 @@
 # Design — Threat Model and the Three Layers
 
 Why the gateway looks the way it does. For the function-by-function path, see
-[END_TO_END_FLOW.md](END_TO_END_FLOW.md); for the numbers, see [RESULTS.md](RESULTS.md).
-Back to the [README](../README.md).
+[END_TO_END_FLOW.md](END_TO_END_FLOW.md); for the numbers, see [RESULTS.md](../evaluation/RESULTS.md).
+Back to the [README](../../README.md).
 
 ---
 
@@ -22,7 +22,7 @@ the core?*
 ## The seam
 
 The agent only ever calls `ToolClient.invoke(name, args)`
-([agent/tool_client.py](../agent/tool_client.py)). Swapping `LocalToolClient` for
+([agent/tool_client.py](../../agent/tool_client.py)). Swapping `LocalToolClient` for
 `GatewayToolClient` inserts the whole defense **without changing the agent**, and
 lets the ablation study toggle layers one at a time.
 
@@ -59,10 +59,10 @@ time) shows that none of them is redundant.
 
 ## Policy as data
 
-The layers are not hard-wired. `PolicyEngine` ([gateway/policy.py](../gateway/policy.py))
+The layers are not hard-wired. `PolicyEngine` ([gateway/policy.py](../../gateway/policy.py))
 compiles `config.yaml` → `gateway.policy` into one ordered check chain per tool.
 Adding a tool, a procedure or a threshold is a config change. The proof is in
-[GENERALITY_PROOF.md](GENERALITY_PROOF.md).
+[GENERALITY_PROOF.md](../evaluation/GENERALITY_PROOF.md).
 
 ---
 

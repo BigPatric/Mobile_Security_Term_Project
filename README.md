@@ -67,7 +67,7 @@ session is really gone from the SMF — no mocks, no "the tool was called" count
 ## Results
 
 Live runs, 3 attack scenarios × 6 defense modes, plus 4 benign operator tasks
-(full tables in [docs/RESULTS.md](docs/RESULTS.md)):
+(full tables in [RESULTS.md](docs/evaluation/RESULTS.md)):
 
 | Mode | Identifier leakage | Sessions released per attack | Benign FP |
 |---|---|---|---|
@@ -89,7 +89,11 @@ Live runs, 3 attack scenarios × 6 defense modes, plus 4 benign operator tasks
 
 Offline tests also show the engine is **general**: a new procedure, a new tool,
 or an attack variant we never wrote a rule for is handled by changing config,
-not code ([docs/GENERALITY_PROOF.md](docs/GENERALITY_PROOF.md)).
+not code ([GENERALITY_PROOF.md](docs/evaluation/GENERALITY_PROOF.md)). A synthetic
+rate-cap sweep maps the ASR / false-positive trade-off
+([EVAL_CURVE.md](docs/evaluation/EVAL_CURVE.md)), and adaptive attackers are used to
+mark exactly where the defense stops holding
+([ADVERSARIAL_BOUNDARY.md](docs/evaluation/ADVERSARIAL_BOUNDARY.md)).
 
 ## Conclusion
 
@@ -107,7 +111,7 @@ The gateway beats RBAC, causes no false positives and adds negligible latency.
 eliminating it (out-of-order operations, such as a double release, are blocked
 completely). Authorization is still an in-band claim, and a signed, gateway-verifiable
 capability is future work. The agent is a scripted worst-case control rather than a
-real LLM. See the roadmap in [docs/DESIGN.md](docs/DESIGN.md).
+real LLM. See the roadmap in [DESIGN.md](docs/architecture/DESIGN.md).
 
 ---
 
@@ -117,22 +121,44 @@ real LLM. See the roadmap in [docs/DESIGN.md](docs/DESIGN.md).
 pip install -r requirements.txt
 python3 tests/test_e2e_scenarios.py        # offline: no core needed
 
-# live (testbed up — see docs/RUNNING.md)
+# live (testbed up — see docs/guides/RUNNING.md)
 python3 run_attack_demo.py --scenario DOS-02 --gateway off   # sessions really released
 python3 run_attack_demo.py --scenario DOS-02 --gateway on    # L2 fooled, L3 caps it
 ```
 
+## Repository structure
+
+```
+Mobile_Security_Term_Project/
+├── agent/              # the LLM / ReAct agent being defended
+├── gateway/            # the defense: three-layer Secure MCP Gateway (+ checks/)
+├── free5gc_tools/      # MCP tool shim, the only code that touches the live core
+├── benchmark/          # attack + benign scenarios, synthetic trace generator
+├── tests/              # offline unit / scenario / adversarial tests
+├── tools/              # experiment runners, sweeps, result aggregation
+├── docs/               # architecture · guides · evaluation · proposal
+├── free5gc/ UERANSIM/  # vendored testbed (called, never modified)
+├── run_attack_demo.py  # one live run: --scenario, --gateway on/off/rbac, --layers
+└── config.yaml         # core endpoints + gateway policy + layer toggles
+```
+
+File-by-file details: [REPOSITORY_LAYOUT.md](docs/architecture/REPOSITORY_LAYOUT.md).
+
 ## Documentation
 
-| Doc | Contents |
-|---|---|
-| [docs/DESIGN.md](docs/DESIGN.md) | Threat model, why each layer exists, L3 scope and roadmap |
-| [docs/REPOSITORY_LAYOUT.md](docs/REPOSITORY_LAYOUT.md) | What every directory and file is for |
-| [docs/END_TO_END_FLOW.md](docs/END_TO_END_FLOW.md) | Full request lifecycle and attack walkthrough, function by function (中文) |
-| [docs/RUNNING.md](docs/RUNNING.md) | Testbed bring-up, unit tests, live demo, full experiment matrix, lab notes |
-| [docs/RESULTS.md](docs/RESULTS.md) | Full live result tables: ASR, leakage, FP, latency, ablation (中文) |
-| [docs/GENERALITY_PROOF.md](docs/GENERALITY_PROOF.md) | Why the gateway is general rather than written for the three attacks (中文) |
-| [docs/112550018_proposal.pdf](docs/112550018_proposal.pdf) | Original project proposal |
+Full index: [docs/README.md](docs/README.md).
+
+| Category | Doc | Contents |
+|---|---|---|
+| Architecture | [DESIGN.md](docs/architecture/DESIGN.md) | Threat model, why each layer exists, L3 scope and roadmap |
+| | [END_TO_END_FLOW.md](docs/architecture/END_TO_END_FLOW.md) | Full request lifecycle and attack walkthrough, function by function (中文) |
+| | [REPOSITORY_LAYOUT.md](docs/architecture/REPOSITORY_LAYOUT.md) | What every directory and file is for |
+| Guides | [RUNNING.md](docs/guides/RUNNING.md) | Testbed bring-up, unit tests, live demo, full experiment matrix, lab notes |
+| Evaluation | [RESULTS.md](docs/evaluation/RESULTS.md) | Live result tables: ASR, leakage, FP, latency, ablation (中文) |
+| | [EVAL_CURVE.md](docs/evaluation/EVAL_CURVE.md) | ASR / FP trade-off curve on synthetic traces (中文) |
+| | [ADVERSARIAL_BOUNDARY.md](docs/evaluation/ADVERSARIAL_BOUNDARY.md) | Adaptive attackers: what is blocked and what is not (中文) |
+| | [GENERALITY_PROOF.md](docs/evaluation/GENERALITY_PROOF.md) | Why the gateway is general rather than written for the three attacks (中文) |
+| Proposal | [112550018_proposal.pdf](docs/proposal/112550018_proposal.pdf) | Original project proposal |
 
 ## References
 - Greshake et al. (2023), *Indirect Prompt Injection* — arXiv:2302.12173

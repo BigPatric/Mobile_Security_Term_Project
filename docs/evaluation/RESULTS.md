@@ -1,9 +1,8 @@
 # 實驗結果 — Secure MCP Gateway for the 5G Core
 
-**對象:** 評分老師、隊友。
 **更新:** 2026-11-19
-**資料來源:** live free5GC + UERANSIM run,`attack_evidence.jsonl`,以 [../tools/aggregate.py](../tools/aggregate.py) 彙總。
-**關聯:** [../README.md](../README.md) · [END_TO_END_FLOW.md](END_TO_END_FLOW.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · 執行方式見 [RUNNING.md](RUNNING.md)
+**資料來源:** live free5GC + UERANSIM run,`attack_evidence.jsonl`,以 [../tools/aggregate.py](../../tools/aggregate.py) 彙總。
+**關聯:** [../README.md](../../README.md) · [END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · 執行方式見 [RUNNING.md](../guides/RUNNING.md)
 
 所有數字都是 **ground truth**:攻擊「成功」僅當 free5GC 核心端確認 PDU session 真的被拆除
 (SMF SM context 消失),不是「呼叫了工具」就算。復現:

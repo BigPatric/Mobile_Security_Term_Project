@@ -17,7 +17,7 @@ Conclusion this supports:
     NOT evadable by timing (an out-of-state op is illegal whenever it happens).
     So the real floor of the defense is PROCEDURE-STATE consistency, not rate;
     the residual risk (slow-drip over many individually-legal sessions) motivates
-    a cumulative/absolute budget as future work — see docs/ADVERSARIAL_BOUNDARY.md.
+    a cumulative/absolute budget as future work — see docs/evaluation/ADVERSARIAL_BOUNDARY.md.
 
 Time is injected via a fake clock (now_fn), so "slow" needs no real waiting and
 the result is deterministic.
