@@ -4,7 +4,9 @@ IEEE conference format (`IEEEtran`), two columns.
 
 | File | Contents |
 |---|---|
-| `main.tex` | The report |
+| `main.tex` | The report (LaTeX, matches `final_report_v2.docx`) |
+| `final_report_v2.docx` | Word version of the report |
+| `final_report.docx` | Earlier Word draft |
 | `references.bib` | Bibliography (BibTeX) |
 | `figures/` | Images included with `\includegraphics` (PNG, JPG or PDF) |
 
@@ -36,11 +38,16 @@ To add a picture, put it in `figures/` and reference it by file name:
 
 Use `figure*` with `width=\textwidth` for a figure that spans both columns.
 
-`main.tex` already has one slot: save a terminal screenshot of the DOS-02 live run
-as `figures/dos02_demo.png` and it replaces the placeholder box.
+Screenshots in `figures/` come from the live runs in the progress report:
+
+| File | Used by | Content |
+|---|---|---|
+| `tex_smf_release_log.png` | LaTeX | free5GC SMF log of one release (ground truth) |
+| `tex_enum_off.png`, `tex_enum_on.png` | LaTeX | ENUM-01 without / with L1 (cropped to calls + verdict) |
+| `tex_dos02_l1l2.png`, `tex_dos02_full.png` | LaTeX | DOS-02 under L1+L2 vs the full gateway |
+| `fig_*.png` | Word | Same content, merged into single images; plus the four charts/diagrams |
 
 ## Before submitting
 
-- Set `\authorname` near the top of `main.tex`.
 - Numbers come from `docs/evaluation/*.md`; if you rerun the live matrix, update
   Tables II–III and the bar chart (`\addplot` coordinates) together.

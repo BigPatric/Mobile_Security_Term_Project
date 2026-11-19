@@ -8,6 +8,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}          % \includegraphics for screenshots / PNG / PDF figures
 \graphicspath{{figures/}}
+\usepackage[caption=false,font=footnotesize]{subfig}  % IEEE-recommended (a)/(b) panels
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage{array}
@@ -44,7 +45,7 @@
 
 \newcommand{\code}[1]{\texttt{\small #1}}
 
-\newcommand{\authorname}{[HSIN-ZE WU]}
+\newcommand{\authorname}{Hsin-Ze Wu}
 
 \begin{document}
 
@@ -206,6 +207,13 @@ way in, the gateway detokenizes identifiers and runs the tool's check chain, sto
 first check that blocks. On the way out, it observes the result to update taint and
 procedure state, then tokenizes identifiers before the agent sees them.
 
+\textit{Integration and compliance.} Toward the core, the gateway is an ordinary SBI
+consumer, so free5GC and the 3GPP interfaces are unchanged. With NRF OAuth~2.0 enabled
+(TS~33.501~\cite{ts33501}), the gateway would hold the access token instead of the agent; it
+can therefore only \emph{narrow} the rights the standard already grants, never widen them.
+TS~33.501 decides which NF type may call a service; the gateway decides whether a specific
+call, made by a possibly hijacked agent, is legitimate.
+
 \subsection{L1: identifier tokenization}
 Every SUPI in a tool result is replaced by an opaque token (e.g.\ \code{token\_sub\_a8f9})
 before it reaches the agent, and tokens are mapped back only inside the gateway. Identifier
@@ -304,6 +312,16 @@ Calling the tool, or receiving an HTTP 2xx, is never counted as success. This pa
 SMF$\rightarrow$AMF$\rightarrow$gNB$\rightarrow$UE N1/N2 signalling, so the UE still
 believes its session is up while the UPF has already dropped its N4 state. That is a
 silent network-side DoS, and it is also why the AMF's view of the session can be stale.
+Fig.~\ref{fig:smflog} shows the core-side evidence of one release.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{tex_smf_release_log.png}
+\caption{free5GC log during a DoS run: the SMF handles the release, deletes the PFCP session
+on the UPF, and removes the SM context from its pool. The harness counts a release only after
+confirming the SM context is gone.}
+\label{fig:smflog}
+\end{figure*}
 
 \subsection{Agent}
 The agent is a deterministic ReAct loop that models a naive NOC policy: read the alert
@@ -345,22 +363,6 @@ BENIGN-02, one authorized maintenance release; BENIGN-03, a health check after r
 harmless (but untrusted) alert; and BENIGN-04, one authorized release in a session that is
 already tainted. BENIGN-04 is the hardest case because it differs from DOS-02 only in
 volume.
-
-% Screenshot slot: drop figures/dos02_demo.png in and it appears; until then a
-% placeholder box is drawn so the document still compiles.
-\begin{figure}[t]
-\centering
-\IfFileExists{figures/dos02_demo.png}{%
-  \includegraphics[width=\columnwidth]{dos02_demo.png}%
-}{%
-  \fbox{\parbox[c][28mm][c]{0.92\columnwidth}{\centering\footnotesize\color{gwgrey}
-    Screenshot placeholder: save as \texttt{figures/dos02\_demo.png}\\
-    (e.g.\ \texttt{run\_attack\_demo.py --scenario DOS-02 --gateway on} output)}}%
-}
-\caption{DOS-02 against the full gateway on the live testbed: L2 passes the forged ticket,
-L3 blocks the third release at the rate cap.}
-\label{fig:demo}
-\end{figure}
 
 \subsection{Experiment harness}
 For every cell of the scenario $\times$ defense-mode matrix, a script tears down the core,
@@ -443,16 +445,35 @@ attacks down by scenario. The figures support four conclusions.
 permits, so the allow-list changes nothing. This is the core motivation for the gateway.
 
 \emph{L1 eliminates identifier leakage.} From L1 on, ENUM-01 returns only tokens and leakage
-drops from 1.00 to 0.00.
+drops from 1.00 to 0.00 (Fig.~\ref{fig:enum}).
+
+\begin{figure*}[t]
+\centering
+\subfloat[Gateway off: raw SUPIs reach the agent]{\includegraphics[width=0.485\textwidth]{tex_enum_off.png}}\hfill
+\subfloat[Gateway on (L1): the agent sees only tokens]{\includegraphics[width=0.485\textwidth]{tex_enum_on.png}}
+\caption{ENUM-01 on the live testbed. Without the gateway the agent receives and reports real
+SUPIs; with L1 it receives only tokens, and the run is judged safe.}
+\label{fig:enum}
+\end{figure*}
 
 \emph{L2 stops DOS-01 but is laundered by DOS-02.} Under L1+L2 the plain injection is blocked
 at the first release (\code{taint-control-flow}), but DOS-02 releases all three sessions:
-the copied ticket satisfies L2's authorization branch.
+the copied ticket satisfies L2's authorization branch (Fig.~\ref{fig:dos02}a).
 
 \emph{L3 is the only layer that holds against a forged authorization.} L3 ignores the ticket
 and stops DOS-02 at the rate cap, limiting it to 2 sessions. In the full gateway, DOS-01 is
-stopped earlier by L2 (0 sessions), and DOS-02 by L3 (2 sessions). Removing any layer lets
-some attack through, so none is redundant.
+stopped earlier by L2 (0 sessions), and DOS-02 by L3 (2 sessions; Fig.~\ref{fig:dos02}b).
+Removing any layer lets some attack through, so none is redundant.
+
+\begin{figure*}[t]
+\centering
+\subfloat[L1+L2 only: all three releases verified \texttt{ACTIVE}$\rightarrow$\texttt{RELEASED}]{\includegraphics[width=0.485\textwidth]{tex_dos02_l1l2.png}}\hfill
+\subfloat[Full gateway: the third release is blocked]{\includegraphics[width=0.485\textwidth]{tex_dos02_full.png}}
+\caption{DOS-02 on the live testbed, with forged ticket \texttt{CHG-20481} attached to every
+release. L2 accepts the ticket in both runs; only L3's rate check, which ignores it, stops the
+bulk teardown.}
+\label{fig:dos02}
+\end{figure*}
 
 Binary ASR undersells this result: a capped DOS-02 still counts as a success because two
 sessions changed state. Blast radius is the more informative metric, and the cap bounds it
@@ -629,7 +650,11 @@ et al.~\cite{greshake2023} established indirect prompt injection against LLM-int
 applications, and EchoLeak~\cite{echoleak2025} showed zero-click exfiltration in a production
 assistant. CaMeL~\cite{camel2025} separates control and data flow and enforces capabilities
 outside the model; our L1 and L2 follow that principle, and L3 adds domain knowledge, the
-3GPP procedure state, that a generic capability system lacks. Jiang et
+3GPP procedure state, that a generic capability system lacks. Progent~\cite{progent2025}
+enforces deterministic privilege policies over tool names and arguments, but its per-call
+rules cannot express a stateful constraint such as ``release only an active session''.
+TS~33.501~\cite{ts33501} authorizes service access per NF type through OAuth~2.0, so a
+hijacked but authorized consumer passes every check. Jiang et
 al.~\cite{jiang2026} place LLM agents in the core for intent-based 6G networking but focus on
 orchestration rather than security. To our knowledge, no prior work enforces provenance and
 3GPP procedure state at an MCP gateway in front of a 5G core.
@@ -649,9 +674,12 @@ clear: rate bounds bursts but not slow drip, and only procedure ordering is a gu
 attacker timing can evade.
 
 \section*{Artifact}
+% Left-aligned: long monospace paths cannot hyphenate, so full justification
+% would stretch the spaces between words into wide gaps.
+{\raggedright
 Source code, configuration, experiment scripts and documentation are in the project
 repository. \code{tools/run\_live\_matrix.sh} reproduces the live matrix and
-\code{tools/eval\_curve.py} the synthetic curve.
+\code{tools/eval\_curve.py} the synthetic curve.\par}
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}
