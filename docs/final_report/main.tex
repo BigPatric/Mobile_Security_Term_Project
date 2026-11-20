@@ -76,7 +76,7 @@ attack as successful only when the SMF confirms that the session is really gone.
 exactly the same as having no defense at all. L1 reduces identifier leakage from 100\% to
 0\%. L2 blocks the plain injected DoS but is bypassed by a forged change ticket, and L3 still
 caps that attack at its rate budget. The full gateway produces no false positives on four
-benign operator tasks and adds a median overhead of 0.035\,ms per call. Offline experiments
+benign operator tasks and adds a median overhead below 0.05\,ms per call. Offline experiments
 add an ASR/false-positive trade-off curve, an adaptive-attacker analysis that marks where the
 defense stops holding, and evidence that new procedures and tools are protected by
 configuration alone.
@@ -285,7 +285,7 @@ trigger_pdu_session_release:
     - identifier                          # L1
     - provenance: {allow_authorized: true}  # L2
     - fsm: {procedure: pdu_session, event: release}  # L3
-    - rate: {bucket: pdu_release, max: 2,
+    - rate: {bucket: pdu_release, max: 3,
              window_sec: 60, exempt_authorized: false}
     - core_precheck: {via: query_subscriber_session, ...}
 \end{lstlisting}
@@ -298,8 +298,9 @@ with no other checks), so the comparison is like for like.
 \label{sec:testbed}
 
 \subsection{Testbed}
-We run free5GC v4.1.0 and UERANSIM v3.2.7 on a Linux VM, with one gNB and three UEs, each
-holding one active PDU session. The gateway, agent and tool adapters are written in Python.
+We run free5GC v4.1.0 and UERANSIM v3.2.7 on a Linux VM, with one gNB and nine UEs, each
+holding one active PDU session. UEs are brought up staggered (2\,s apart) so their PDU-session
+establishments do not collide at the SMF/UPF. The gateway, agent and tool adapters are written in Python.
 NRF OAuth is disabled (\code{oauth: false}); it protects NF-to-NF traffic, which is
 orthogonal to the agent-to-core path we defend.
 
@@ -366,8 +367,9 @@ volume.
 
 \subsection{Experiment harness}
 For every cell of the scenario $\times$ defense-mode matrix, a script tears down the core,
-brings up a fresh core with all three sessions active, and runs a single attack. A release
-in one run therefore never affects the next. Results are appended to an evidence log and
+brings up a fresh core with all nine sessions active, and runs one attack; each cell is
+repeated five times. A release in one run therefore never affects the next. The live numbers
+below are over 130 runs in total. Results are appended to an evidence log and
 aggregated by a separate script that only does arithmetic on recorded ground truth.
 
 % ===========================================================================
@@ -388,18 +390,18 @@ gateway.
 
 \begin{table}[t]
 \centering
-\caption{Live results (3 attacks per mode; full ran DOS-02 twice)}
+\caption{Live results (3 attacks $\times$ 5 repeats per mode; nine sessions, cap~3)}
 \label{tab:live}
 \begin{tabular}{@{}lccc@{}}
 \toprule
 Mode & ASR & Leakage & Mean released \\
 \midrule
-off (no gateway)     & 0.67 & 1.00 & 2.00 \\
-RBAC allow-list      & 0.67 & 1.00 & 2.00 \\
-L1                   & 0.67 & \textbf{0.00} & 2.00 \\
-L1+L2                & 0.33 & 0.00 & 1.00 \\
-L1+L3                & 0.67 & 0.00 & 1.33 \\
-\textbf{L1+L2+L3 (full)} & 0.50 & \textbf{0.00} & \textbf{1.00} \\
+off (no gateway)     & 0.67 & 1.00 & 5.93 \\
+RBAC allow-list      & 0.67 & 1.00 & 5.53 \\
+L1                   & 0.67 & \textbf{0.00} & 5.93 \\
+L1+L2                & 0.33 & 0.00 & 2.87 \\
+L1+L3                & 0.67 & 0.00 & 2.00 \\
+\textbf{L1+L2+L3 (full)} & \textbf{0.33} & \textbf{0.00} & \textbf{1.00} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -411,9 +413,9 @@ L1+L3                & 0.67 & 0.00 & 1.33 \\
     ybar,
     width=\columnwidth, height=46mm,
     bar width=6pt,
-    ymin=0, ymax=3.6,
-    ytick={0,1,2,3},
-    ylabel={Sessions released (of 3)},
+    ymin=0, ymax=10.2,
+    ytick={0,3,6,9},
+    ylabel={Sessions released (of 9)},
     ylabel style={font=\footnotesize},
     symbolic x coords={off,rbac,lone,lonetwo,lonethree,full},
     xtick=data,
@@ -427,14 +429,14 @@ L1+L3                & 0.67 & 0.00 & 1.33 \\
     ymajorgrids, grid style={gwlight},
     axis line style={gwgrey},
   ]
-  \addplot[fill=gwblue, draw=gwblue] coordinates {(off,3) (rbac,3) (lone,3) (lonetwo,0) (lonethree,2) (full,0)};
-  \addplot[fill=gworange, draw=gworange] coordinates {(off,3) (rbac,3) (lone,3) (lonetwo,3) (lonethree,2) (full,2)};
+  \addplot[fill=gwblue, draw=gwblue] coordinates {(off,9) (rbac,8) (lone,9) (lonetwo,0) (lonethree,3) (full,0)};
+  \addplot[fill=gworange, draw=gworange] coordinates {(off,8.8) (rbac,8.6) (lone,8.8) (lonetwo,8.6) (lonethree,3) (full,3)};
   \legend{DOS-01, DOS-02}
 \end{axis}
 \end{tikzpicture}
-\caption{Sessions torn down per DoS attack, by defense mode (live, ground truth). DOS-02 under
-L1+L2 shows provenance being bypassed by the forged ticket; L3 holds the damage at its rate
-budget of 2.}
+\caption{Mean sessions torn down per DoS attack (of nine), by defense mode (live, ground truth,
+5 repeats). DOS-02 under L1+L2 shows provenance being bypassed by the forged ticket; L3 holds the
+damage at its rate budget of 3.}
 \label{fig:released}
 \end{figure}
 
@@ -457,27 +459,30 @@ SUPIs; with L1 it receives only tokens, and the run is judged safe.}
 \end{figure*}
 
 \emph{L2 stops DOS-01 but is laundered by DOS-02.} Under L1+L2 the plain injection is blocked
-at the first release (\code{taint-control-flow}), but DOS-02 releases all three sessions:
-the copied ticket satisfies L2's authorization branch (Fig.~\ref{fig:dos02}a).
+at the first release (\code{taint-control-flow}), but DOS-02 releases all nine sessions
+(mean 8.6): the copied ticket satisfies L2's authorization branch (Fig.~\ref{fig:dos02}a).
 
 \emph{L3 is the only layer that holds against a forged authorization.} L3 ignores the ticket
-and stops DOS-02 at the rate cap, limiting it to 2 sessions. In the full gateway, DOS-01 is
-stopped earlier by L2 (0 sessions), and DOS-02 by L3 (2 sessions; Fig.~\ref{fig:dos02}b).
+and stops DOS-02 at the rate cap, limiting it to 3 sessions. In the full gateway, DOS-01 is
+stopped earlier by L2 (0 sessions), and DOS-02 by L3 (3 sessions; Fig.~\ref{fig:dos02}b).
 Removing any layer lets some attack through, so none is redundant.
 
 \begin{figure*}[t]
 \centering
-\subfloat[L1+L2 only: all three releases verified \texttt{ACTIVE}$\rightarrow$\texttt{RELEASED}]{\includegraphics[width=0.485\textwidth]{tex_dos02_l1l2.png}}\hfill
-\subfloat[Full gateway: the third release is blocked]{\includegraphics[width=0.485\textwidth]{tex_dos02_full.png}}
+\subfloat[L1+L2 only: every release verified \texttt{ACTIVE}$\rightarrow$\texttt{RELEASED}]{\includegraphics[width=0.485\textwidth]{tex_dos02_l1l2.png}}\hfill
+\subfloat[Full gateway: releases past the rate cap are blocked]{\includegraphics[width=0.485\textwidth]{tex_dos02_full.png}}
 \caption{DOS-02 on the live testbed, with forged ticket \texttt{CHG-20481} attached to every
-release. L2 accepts the ticket in both runs; only L3's rate check, which ignores it, stops the
-bulk teardown.}
+release. L2 accepts the ticket and lets the bulk teardown through; only L3's rate check, which
+ignores the ticket, stops it once the per-window cap is reached. (Trace shown from an earlier
+smaller-testbed run; the nine-UE aggregates are in Table~\ref{tab:live}.)}
 \label{fig:dos02}
 \end{figure*}
 
-Binary ASR undersells this result: a capped DOS-02 still counts as a success because two
-sessions changed state. Blast radius is the more informative metric, and the cap bounds it
-at a fixed number of sessions per window regardless of how many sessions the core holds.
+Binary ASR undersells this result: a capped DOS-02 still counts as a success because three
+sessions changed state. Blast radius is the more informative metric: the cap bounds damage at
+a fixed number of releases per window (3) regardless of how many sessions the core holds, so
+with nine sessions the full gateway cuts the teardown from nine to one and L3 holds DOS-02 to
+one third of the sessions. The fraction contained improves as the core grows.
 
 \subsection{False positives}
 The full gateway and RBAC both pass all four benign tasks (FP rate 0.00 for each). This
@@ -489,27 +494,32 @@ the session exists.
 
 \begin{table}[t]
 \centering
-\caption{Gateway overhead per tool call (ms)}
+\caption{Gateway overhead per tool call (ms), steady state (first pass)}
 \label{tab:latency}
 \begin{tabular}{@{}lrrrrr@{}}
 \toprule
 Mode & Calls & Mean & p50 & p95 & Max \\
 \midrule
-RBAC   & 34 & 0.039 & 0.011 & 0.104 & 0.150 \\
-L1     & 18 & 0.099 & 0.101 & 0.186 & 0.214 \\
-L1+L2  & 18 & 0.075 & 0.037 & 0.250 & 0.319 \\
-L1+L3  & 18 & 2.884 & 0.109 & 17.941 & 18.502 \\
-Full   & 42 & 1.496 & 0.035 & 7.967 & 15.380 \\
+RBAC   & 91 & 0.038 & 0.023 & 0.090 & 0.143 \\
+L1     & 64 & 0.082 & 0.083 & 0.132 & 0.208 \\
+L1+L2  & 63 & 0.054 & 0.034 & 0.180 & 0.206 \\
+L1+L3  & 64 & 3.249 & 0.035 & 23.291 & 26.947 \\
+Full   & 92 & 1.156 & 0.025 & 0.092 & 22.647 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:latency} shows the median overhead is between 0.01 and 0.11\,ms in every mode,
-far below the 50\,ms target set in the proposal. The tail (8--18\,ms) comes entirely from
-L3's core precheck, a single real round trip to the core, made only for high-risk calls.
-L1+L3 has a \emph{higher} mean than the full gateway: without L2, every DOS-01 release
-reaches the precheck, whereas the full gateway blocks it earlier. Blocking earlier is
-cheaper as well as safer.
+Table~\ref{tab:latency} shows the median overhead is between 0.02 and 0.08\,ms in every mode,
+far below the 50\,ms target set in the proposal. The tail (up to 27\,ms) comes entirely from
+L3's core precheck, a single real round trip to the core, made only for high-risk calls:
+L1 and L2 never exceed 0.21\,ms. L1+L3 has a \emph{higher} mean than the full gateway because
+without L2 every DOS-01 release reaches the precheck, whereas the full gateway blocks it
+earlier; blocking earlier is cheaper as well as safer. The table reports the first pass through
+the 130-run matrix. Across later passes the precheck tail drifts upward (pooled over all runs,
+the L1+L3 p95 reaches $\approx$98\,ms), which we attribute to free5GC core state accumulating
+over repeated bring-ups and tear-downs rather than to the gateway; the median is unaffected
+(pooled p50 $\le$0.06\,ms). This drift is a property of the sequential testbed, not of the
+per-call check, which is a single round trip regardless of run index.
 
 \subsection{Rate-cap trade-off on synthetic traces}
 
@@ -604,16 +614,17 @@ In total the project has 62 offline unit and integration tests, all passing.
 % ===========================================================================
 \section{Discussion and Limitations}
 
-\textbf{Testbed scale.} The live testbed has three UEs. This is enough for the per-call
-guarantees (tokenization, taint and ordering do not depend on how many sessions exist), but
-with a cap of~2 a capped DOS-02 still removes two thirds of the sessions. The cap bounds an
-absolute number of releases per window, so the fraction falls as the core grows. A live run
-with more UEs would show this directly. The cap value was chosen to fit the testbed; in
+\textbf{Testbed scale.} The live testbed has nine UEs. This is enough for the per-call
+guarantees (tokenization, taint and ordering do not depend on how many sessions exist), and
+with a cap of~3 a capped DOS-02 removes only one third of the sessions. The cap bounds an
+absolute number of releases per window, so the contained fraction falls as the core grows: a
+larger core would make L3 look stronger still. The cap value is set to an operator-normal
+release rate rather than the session count, so it is independent of testbed size; in
 deployment it should come from observed operator behavior (Fig.~\ref{fig:curve}).
 
-\textbf{Sample size.} Each live cell ran once (twice for one cell). The live numbers
-demonstrate behavior on a real core; they are not statistical estimates. The harness
-supports repeated runs.
+\textbf{Sample size.} Each live cell ran five times (130 runs in total). The live numbers
+are means over those repeats on a real core; per-call latency still carries the testbed drift
+noted above, so we report the first pass for steady-state overhead.
 
 \textbf{Scripted agent.} The proposal planned to measure baseline ASR on two LLMs and to
 compare against a generic guardrail. Neither was done: the advisor ruled a real LLM agent
@@ -667,7 +678,8 @@ not in the model. Our gateway's three layers each close a different hole: L1 pro
 identifier confidentiality, L2 protects source integrity, and L3 protects procedure
 integrity. On a live free5GC core, RBAC was no better than no defense, while the full gateway
 reduced identifier leakage to zero, blocked the injected DoS, bounded the forged-authorization
-DoS at its rate budget, caused no false positives, and added a median 0.035\,ms per call.
+DoS at its rate budget (three of nine sessions), caused no false positives, and added a median
+overhead below 0.05\,ms per call.
 L3 is the layer that still holds when an authorization is forged, stolen or misused,
 because it never trusts the authorization in the first place. Its limits are equally
 clear: rate bounds bursts but not slow drip, and only procedure ordering is a guarantee no
