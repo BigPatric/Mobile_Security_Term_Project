@@ -4,9 +4,7 @@ IEEE conference format (`IEEEtran`), two columns.
 
 | File | Contents |
 |---|---|
-| `main.tex` | The report (LaTeX, matches `final_report_v2.docx`) |
-| `final_report_v2.docx` | Word version of the report |
-| `final_report.docx` | Earlier Word draft |
+| `main.tex` | The report (LaTeX) |
 | `references.bib` | Bibliography (BibTeX) |
 | `figures/` | Images included with `\includegraphics` (PNG, JPG or PDF) |
 
@@ -49,5 +47,7 @@ Screenshots in `figures/` come from the live runs in the progress report:
 
 ## Before submitting
 
-- Numbers come from `docs/evaluation/*.md`; if you rerun the live matrix, update
-  Tables II–III and the bar chart (`\addplot` coordinates) together.
+- Live numbers come from `results_effectiveness.csv`, `results_false_positives.csv` and
+  `results_latency.csv` at the repo root (nine UEs, 5 repeats, cap 3). If you rerun the live
+  matrix, update Tables II–III and the bar chart (`\addplot` coordinates) together.
+  (`docs/evaluation/RESULTS.md` still holds the older three-UE run.)

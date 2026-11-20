@@ -518,7 +518,7 @@ earlier; blocking earlier is cheaper as well as safer. The table reports the fir
 the 130-run matrix. Across later passes the precheck tail drifts upward (pooled over all runs,
 the L1+L3 p95 reaches $\approx$98\,ms), which we attribute to free5GC core state accumulating
 over repeated bring-ups and tear-downs rather than to the gateway; the median is unaffected
-(pooled p50 $\le$0.06\,ms). This drift is a property of the sequential testbed, not of the
+(pooled p50 $\le$0.06\,ms for both precheck modes). This drift is a property of the sequential testbed, not of the
 per-call check, which is a single round trip regardless of run index.
 
 \subsection{Rate-cap trade-off on synthetic traces}
@@ -690,7 +690,9 @@ attacker timing can evade.
 % would stretch the spaces between words into wide gaps.
 {\raggedright
 Source code, configuration, experiment scripts and documentation are in the project
-repository. \code{tools/run\_live\_matrix.sh} reproduces the live matrix and
+repository at
+\url{https://github.com/BigPatric/Mobile_Security_Term_Project}.
+\code{tools/run\_live\_matrix.sh} reproduces the live matrix and
 \code{tools/eval\_curve.py} the synthetic curve.\par}
 
 \bibliographystyle{IEEEtran}

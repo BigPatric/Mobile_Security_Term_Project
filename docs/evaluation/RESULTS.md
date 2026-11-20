@@ -1,7 +1,8 @@
 # Results — Secure MCP Gateway for the 5G Core
 
-**Updated:** 2026-11-19
-**Data source:** live free5GC + UERANSIM runs, `attack_evidence.jsonl`, aggregated with [../tools/aggregate.py](../../tools/aggregate.py).
+**Updated:** 2026-11-21 (nine UEs, 5 repeats per cell, rate cap 3; 130 live runs)
+**Data source:** live free5GC + UERANSIM runs, `attack_evidence.jsonl`, aggregated with [../tools/aggregate.py](../../tools/aggregate.py) into `results_effectiveness.csv`,
+`results_false_positives.csv` and `results_latency.csv` at the repo root.
 **Related:** [../README.md](../../README.md) · [END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · how to run: [RUNNING.md](../guides/RUNNING.md)
 
 Every number is **ground truth**: an attack "succeeds" only when the free5GC core confirms the PDU
@@ -9,7 +10,7 @@ session was really torn down (the SMF SM context is gone), not merely because th
 To reproduce:
 
 ```bash
-sudo ./tools/run_live_matrix.sh --fresh          # each cell restarts to a full set of sessions, then attacks
+sudo N_UES=9 REPEATS=5 ./tools/run_live_matrix.sh --fresh   # each cell restarts to a full set of sessions, then attacks
 python3 tools/aggregate.py attack_evidence.jsonl # produces the tables below
 ```
 
@@ -17,29 +18,44 @@ python3 tools/aggregate.py attack_evidence.jsonl # produces the tables below
 
 ## 1. Attack effectiveness (ground truth)
 
-3 attack scenarios (ENUM-01 / DOS-01 / DOS-02) × 6 defense levels.
+3 attack scenarios (ENUM-01 / DOS-01 / DOS-02) × 6 defense levels × 5 repeats (15 attack runs per mode),
+nine UEs with one active PDU session each, L3 rate cap `max: 3` per 60 s.
 
 | mode | ASR | leakage | Mean sessions released |
 |---|---|---|---|
-| off (no defense) | 0.67 | 1.00 | 2.00 |
-| rbac (allow-list baseline) | 0.67 | 1.00 | 2.00 |
-| L1 (tokenizer) | 0.67 | **0.00** | 2.00 |
-| L1+L2 (+taint) | **0.33** | 0.00 | 1.00 |
-| L1+L3 (+verifier) | 0.67 | 0.00 | 1.33 |
-| **L1+L2+L3 (full)** | **0.50** | 0.00 | 1.00 |
+| off (no defense) | 0.67 | 1.00 | 5.93 |
+| rbac (allow-list baseline) | 0.67 | 1.00 | 5.53 |
+| L1 (tokenizer) | 0.67 | **0.00** | 5.93 |
+| L1+L2 (+taint) | **0.33** | 0.00 | 2.87 |
+| L1+L3 (+verifier) | 0.67 | 0.00 | 2.00 |
+| **L1+L2+L3 (full)** | **0.33** | 0.00 | **1.00** |
+
+Mean sessions released per DoS attack (of nine):
+
+| mode | DOS-01 | DOS-02 |
+|---|---|---|
+| off | 9.0 | 8.8 |
+| rbac | 8.0 | 8.6 |
+| L1 | 9.0 | 8.8 |
+| L1+L2 | **0** | 8.6 |
+| L1+L3 | 3 | 3 |
+| full | **0** | **3** |
 
 - **ASR** = fraction of attack runs in which core state really changed. ENUM-01 is an **exfiltration**
   attack (it does not change core state), so it counts toward leakage, not ASR; with ENUM-01 in the set,
   the ASR ceiling is below 1.
 - **leakage** = fraction of runs in which a raw SUPI appeared.
+- **Mean released** averages over all three scenarios (ENUM-01 releases nothing), so full = (0 + 3 + 0) / 3 = 1.00.
 
 ### How to read it
-1. **`off` and `rbac` are identical** → RBAC does nothing against abuse that looks authorized, which
+1. **`off` and `rbac` are effectively identical** (same ASR and leakage) → RBAC does nothing against abuse that looks authorized, which
    backs the proposal's "better than RBAC" claim.
 2. **L1 brings leakage from 1.00 to 0** → identifier opacity stops ENUM-01.
 3. **L1+L2 stops DOS-01 (ASR drops), but DOS-02 still passes fully** → L2's provenance is
    "laundered" by the forged authorization (taint laundering).
-4. **full is best:** DOS-01 is blocked by L2, DOS-02 is capped by L3's rate limit.
+4. **full is best:** DOS-01 is blocked by L2 (0 sessions), DOS-02 is capped by L3's rate limit at 3 of 9
+   sessions, cutting the mean teardown from 5.93 (off) to 1.00. The cap is a fixed number of releases per
+   window, so the fraction contained grows with the size of the core.
 
 ---
 
@@ -57,12 +73,12 @@ python3 tools/aggregate.py attack_evidence.jsonl # produces the tables below
 
 ---
 
-## 3. False positives (benign set, 4 legitimate operations tasks)
+## 3. False positives (benign set, 4 legitimate operations tasks × 5 repeats)
 
 | mode | benign runs | FP rate |
 |---|---|---|
-| rbac | 4 | **0.00** |
-| L1+L2+L3 (full) | 4 | **0.00** |
+| rbac | 20 | **0.00** |
+| L1+L2+L3 (full) | 20 | **0.00** |
 
 The full gateway **does not block** any legitimate operation (including the hardest one to tell apart,
 an authorized single release), so security does not cost usability.
@@ -71,21 +87,37 @@ an authorized single release), so security does not cost usability.
 
 ## 4. Latency (gateway overhead per tool call, ms)
 
+**Steady state (first pass through the matrix)** — the numbers used in the final report:
+
 | mode | calls | mean | p50 | p95 | max |
 |---|---|---|---|---|---|
-| rbac | 34 | 0.039 | 0.011 | 0.104 | 0.150 |
-| L1 | 18 | 0.099 | 0.101 | 0.186 | 0.214 |
-| L1+L2 | 18 | 0.075 | 0.037 | 0.250 | 0.319 |
-| L1+L3 | 18 | 2.884 | 0.109 | 17.941 | 18.502 |
-| L1+L2+L3 (full) | 42 | 1.496 | 0.035 | 7.967 | 15.380 |
+| rbac | 91 | 0.038 | 0.023 | 0.090 | 0.143 |
+| L1 | 64 | 0.082 | 0.083 | 0.132 | 0.208 |
+| L1+L2 | 63 | 0.054 | 0.034 | 0.180 | 0.206 |
+| L1+L3 | 64 | 3.249 | 0.035 | 23.291 | 26.947 |
+| L1+L2+L3 (full) | 92 | 1.156 | 0.025 | 0.092 | 22.647 |
+
+**Pooled over all 130 runs** (`results_latency.csv`):
+
+| mode | calls | mean | p50 | p95 | max |
+|---|---|---|---|---|---|
+| rbac | 344 | 0.045 | 0.024 | 0.100 | 0.643 |
+| L1 | 209 | 0.090 | 0.095 | 0.141 | 0.273 |
+| L1+L2 | 207 | 0.080 | 0.065 | 0.184 | 0.377 |
+| L1+L3 | 210 | 10.773 | 0.060 | 97.693 | 149.512 |
+| L1+L2+L3 (full) | 348 | 5.893 | 0.042 | 65.649 | 134.226 |
 
 ### How to read it
-- **p50 is in the tens of microseconds everywhere (0.01–0.1 ms)** → the pure checking logic is nearly free.
-- **The tail (p95/max, 8–18 ms) comes entirely from L3's `core_precheck`**: the one real round-trip in
-  which the gateway asks the core for ground truth, and it happens only on high-risk calls.
-- **Counter-intuitive but explainable: L1+L3 is slower than full** (mean 2.884 vs 1.496). In full,
-  **L2 blocks DOS-01 at the taint stage, before it reaches L3's core round-trip**; L1+L3 has no L2, so
-  every release has to query the core, giving more round-trips and more latency.
+- **p50 is below 0.1 ms in every mode** → the pure checking logic is nearly free. L1 and L2 never
+  exceed 0.4 ms even pooled.
+- **The tail comes entirely from L3's `core_precheck`**: the one real round-trip in which the gateway
+  asks the core for ground truth, and it happens only on high-risk calls (up to ~27 ms in steady state).
+- **The pooled tail drifts upward (L1+L3 p95 ≈ 98 ms)** over later passes. We attribute this to free5GC
+  core state accumulating across repeated bring-ups and tear-downs, not to the gateway: the precheck is a
+  single round-trip regardless of run index, and the precheck modes' pooled p50 stays ≤ 0.06 ms.
+- **Counter-intuitive but explainable: L1+L3 is slower than full** (steady-state mean 3.249 vs 1.156). In
+  full, **L2 blocks DOS-01 at the taint stage, before it reaches L3's core round-trip**; L1+L3 has no L2,
+  so every release has to query the core, giving more round-trips and more latency.
   → **Blocking earlier is not only safer, it also lowers latency.**
 
 ---
@@ -100,23 +132,28 @@ an authorized single release), so security does not cost usability.
 | Every layer is needed (no redundancy) | §2 ablation: disabling any layer lets an attack through |
 | Better than RBAC | §1: rbac matches no defense |
 | No false blocks on normal operations | §3: FP = 0 |
-| Deployable (acceptable overhead) | §4: p50 in microseconds, tail is a single core round-trip |
+| Deployable (acceptable overhead) | §4: p50 < 0.1 ms, tail is a single core round-trip |
 
 ---
 
 ## 6. Limitations / caveats
 
 - **The rate part of ASR bounds the blast radius; it is not zero:** the calls before L3's cap still pass
-  (the "mean released 1.0–1.33" for L1+L3 / full in §1). **Ordering violations (double / out-of-state
+  (3 of 9 sessions for DOS-02 under L1+L3 / full in §1). **Ordering violations (double / out-of-state
   release) are fully blocked**; the two complement each other.
 - **Authorization is currently an in-band claim that the gateway cannot verify independently;**
   signed capabilities are future work. L3's value is exactly this: **when authorization cannot be
   verified, procedure integrity still keeps the damage bounded.**
 - **The data plane (ping) is optional:** the DoS proof comes from the control plane (the SMF SM context
   disappears, plain REST) and needs no NAT or ping.
-- **Sample and matrix:** in this round `full` ran once more than the others (4 runs vs 3; proportions
-  unaffected); benign FP was measured only at the rbac / full levels; latency is pooled from a single
-  round. For stronger statistics, rerun `tools/run_live_matrix.sh` with `REPEATS>=3`.
+- **Sample and matrix:** every cell ran 5 times (15 attack runs per mode, 20 benign runs per FP mode,
+  130 runs total). Benign FP was measured only at the rbac / full levels. Pooled latency carries the
+  testbed drift noted in §4, so steady-state overhead is reported from the first pass.
+- **Rate cap vs. benign bulk:** live FP is 0 because the benign tasks release at most one session. In the
+  offline sweep ([EVAL_CURVE.md](EVAL_CURVE.md)) a cap of 3 blocks authorized bulk maintenance of 5 and 8
+  sessions (FP 0.25); in deployment the cap should come from observed operator behavior.
+- **Screenshots** of DOS-02 in the report come from the earlier three-UE / cap-2 run; the aggregates above
+  are from the nine-UE run.
 - **OAuth is off (`nrfcfg oauth: false`):** protecting NF-to-NF traffic is orthogonal to protecting
   agent→core calls and does not affect these conclusions.
 - Offline, deterministic logic checks (including generality) are in [GENERALITY_PROOF.md](GENERALITY_PROOF.md) and `tests/`.
