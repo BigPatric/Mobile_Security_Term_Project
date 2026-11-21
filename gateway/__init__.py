@@ -11,5 +11,5 @@ never changes: a GatewayToolClient drops in where the LocalToolClient was.
 """
 from .tokenizer import IdentifierTokenizer  # noqa: F401
 from .taint_tracker import TaintTracker  # noqa: F401
-from .policy import DEFAULT_POLICY, PolicyEngine  # noqa: F401
+from .policy import DEFAULT_POLICY, PolicyEngine, SharedCoreState  # noqa: F401
 from .mcp_gateway import GatewayToolClient, build_gateway_client  # noqa: F401

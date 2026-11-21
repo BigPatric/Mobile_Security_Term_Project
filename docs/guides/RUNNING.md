@@ -23,6 +23,7 @@ python3 tests/test_verifier.py       # L3
 python3 tests/test_policy.py         # policy pipeline (config-driven check chain)
 python3 tests/test_generality.py     # generality (composability / cross-procedure / attack-blind)
 python3 tests/test_e2e_scenarios.py  # predicted scenario × mode matrix
+python3 tests/test_hardening.py      # detokenize scope, shared core state, fail-closed probes
 ```
 
 The full quantified matrix can also be produced offline, against a fake core, with
