@@ -15,12 +15,15 @@ Mobile_Security_Term_Project/
 │   ├── architecture/   # DESIGN, END_TO_END_FLOW, REPOSITORY_LAYOUT (this file)
 │   ├── guides/         # RUNNING
 │   ├── evaluation/     # RESULTS, EVAL_CURVE, ADVERSARIAL_BOUNDARY, GENERALITY_PROOF
-│   └── proposal/       # original proposal PDF
+│   ├── final_report/   # final_report.pdf + LaTeX source (latex/)
+│   └── proposal/       # proposal and progress report PDFs
+├── results/            # aggregated live results (CSV) from tools/aggregate.py
 ├── free5gc/            # vendored 5G core (external, called not modified)
 ├── UERANSIM/           # vendored RAN/UE simulator (external, called not modified)
 ├── run_attack_demo.py  # one live run: --scenario, --gateway on/off/rbac, --layers
 ├── config.yaml         # single config: core endpoints + gateway policy + layer toggles
 ├── requirements.txt
+├── LICENSE             # MIT (own code; vendored dirs keep their licenses)
 ├── cleanup.py          # removes __pycache__ directories
 ├── attack_evidence.jsonl  # (git-ignored) append-only evidence, one JSON per run
 └── live_logs/          # (git-ignored) per-cell core / gNB / UE logs from the live matrix

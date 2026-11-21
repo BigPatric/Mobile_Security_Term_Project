@@ -98,5 +98,5 @@ second 5G procedure (registration / deregistration) and on a non-5G one.
 7. **L2 hardening:** treat an `operator_authorization` value that appeared in
    untrusted content as tainted, so DOS-02 is also caught on the provenance side.
 8. **Real LLM agent:** replace the scripted worst-case agent with a real model
-   (`config.agent_mode: "llm"`) and measure baseline ASR. The advisor ruled this
+   and measure baseline ASR (not implemented). The advisor ruled this
    optional for the course on 2026-11-18.

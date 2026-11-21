@@ -2,7 +2,7 @@
 
 **Updated:** 2026-11-21 (nine UEs, 5 repeats per cell, rate cap 3; 130 live runs)
 **Data source:** live free5GC + UERANSIM runs, `attack_evidence.jsonl`, aggregated with [../tools/aggregate.py](../../tools/aggregate.py) into `results_effectiveness.csv`,
-`results_false_positives.csv` and `results_latency.csv` at the repo root.
+`results_false_positives.csv` and `results_latency.csv` in [`results/`](../../results/).
 **Related:** [../README.md](../../README.md) · [END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · how to run: [RUNNING.md](../guides/RUNNING.md)
 
 Every number is **ground truth**: an attack "succeeds" only when the free5GC core confirms the PDU
@@ -11,7 +11,7 @@ To reproduce:
 
 ```bash
 sudo N_UES=9 REPEATS=5 ./tools/run_live_matrix.sh --fresh   # each cell restarts to a full set of sessions, then attacks
-python3 tools/aggregate.py attack_evidence.jsonl # produces the tables below
+python3 tools/aggregate.py --csv results/results attack_evidence.jsonl  # tables below + results/*.csv
 ```
 
 ---
@@ -97,7 +97,7 @@ an authorized single release), so security does not cost usability.
 | L1+L3 | 64 | 3.249 | 0.035 | 23.291 | 26.947 |
 | L1+L2+L3 (full) | 92 | 1.156 | 0.025 | 0.092 | 22.647 |
 
-**Pooled over all 130 runs** (`results_latency.csv`):
+**Pooled over all 130 runs** (`results/results_latency.csv`):
 
 | mode | calls | mean | p50 | p95 | max |
 |---|---|---|---|---|---|
