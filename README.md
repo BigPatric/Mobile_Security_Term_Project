@@ -136,10 +136,12 @@ Mobile_Security_Term_Project/
 ├── benchmark/          # attack + benign scenarios, synthetic trace generator
 ├── tests/              # offline unit / scenario / adversarial tests
 ├── tools/              # experiment runners, sweeps, result aggregation
-├── docs/               # architecture · guides · evaluation · proposal
+├── docs/               # architecture · guides · evaluation · proposal · final report
+├── results/            # aggregated live results (CSV) behind the report's tables
 ├── free5gc/ UERANSIM/  # vendored testbed (called, never modified)
 ├── run_attack_demo.py  # one live run: --scenario, --gateway on/off/rbac, --layers
-└── config.yaml         # core endpoints + gateway policy + layer toggles
+├── config.yaml         # core endpoints + gateway policy + layer toggles
+└── LICENSE             # MIT (own code only; see License below)
 ```
 
 File-by-file details: [REPOSITORY_LAYOUT.md](docs/architecture/REPOSITORY_LAYOUT.md).
@@ -158,6 +160,7 @@ Full index: [docs/README.md](docs/README.md).
 | | [EVAL_CURVE.md](docs/evaluation/EVAL_CURVE.md) | ASR / FP trade-off curve on synthetic traces |
 | | [ADVERSARIAL_BOUNDARY.md](docs/evaluation/ADVERSARIAL_BOUNDARY.md) | Adaptive attackers: what is blocked and what is not |
 | | [GENERALITY_PROOF.md](docs/evaluation/GENERALITY_PROOF.md) | Why the gateway is general rather than written for the three attacks |
+| Report | [final_report.pdf](docs/final_report/final_report.pdf) | Final project report (LaTeX source in [latex/](docs/final_report/latex/)) |
 | Proposal | [112550018_proposal.pdf](docs/proposal/112550018_proposal.pdf) | Original project proposal |
 
 ## References
@@ -165,3 +168,9 @@ Full index: [docs/README.md](docs/README.md).
 - Debenedetti et al. (2025), *CaMeL* — arXiv:2503.18813
 - 3GPP TS 23.502 §4.3 — PDU Session lifecycle (§4.3.4 Release)
 - Model Context Protocol, Specification 2025-11-25 — modelcontextprotocol.io/specification
+
+## License
+
+The project's own code and documentation are released under the [MIT License](LICENSE).
+The vendored third-party directories keep their original licenses:
+[`UERANSIM/`](UERANSIM/LICENSE) is GPL-3.0 and [`free5gc/`](free5gc/LICENSE) is Apache-2.0.

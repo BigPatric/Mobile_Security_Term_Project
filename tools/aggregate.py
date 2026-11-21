@@ -19,7 +19,7 @@ claims, grouped by gateway MODE (off / rbac / L1 / L1+L2 / L1+L3 / L1+L2+L3):
 
 Usage:
     python3 tools/aggregate.py [evidence.jsonl ...]         # default: attack_evidence.jsonl
-    python3 tools/aggregate.py --csv out_prefix FILE ...    # also write <prefix>_*.csv
+    python3 tools/aggregate.py --csv results/results FILE ...  # also write results/results_*.csv
 
 Metrics are defined on GROUND TRUTH recorded in the evidence, so this script is
 pure arithmetic — it never re-runs anything and never fabricates a number.
@@ -180,6 +180,7 @@ def write_csv(prefix: str, tables: List[tuple]) -> None:
     import csv
     for name, hdr, rows in tables:
         path = f"{prefix}_{name}.csv"
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(hdr)

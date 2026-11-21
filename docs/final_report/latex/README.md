@@ -47,5 +47,5 @@ Screenshots in `figures/` come from the live runs in the progress report:
 ## Before submitting
 
 - Live numbers come from `results_effectiveness.csv`, `results_false_positives.csv` and
-  `results_latency.csv` at the repo root (nine UEs, 5 repeats, cap 3). If you rerun the live
+  `results_latency.csv` in `results/` at the repo root (nine UEs, 5 repeats, cap 3). If you rerun the live
   matrix, update Tables II–III and the bar chart (`\addplot` coordinates) together.

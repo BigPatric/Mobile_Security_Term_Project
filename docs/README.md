@@ -7,7 +7,8 @@ docs/
 ├── architecture/   # how the system is built and why
 ├── guides/         # how to run it
 ├── evaluation/     # what we measured and what it shows
-└── proposal/       # original project proposal
+├── final_report/   # final report PDF + LaTeX source (latex/)
+└── proposal/       # project proposal and progress report
 ```
 
 Suggested reading order for a first-time reader:
