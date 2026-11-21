@@ -13,7 +13,7 @@
 # MUST run as root (free5GC run.sh and UERANSIM nr-ue need it):
 #     sudo ./tools/run_live_matrix.sh
 #     sudo ./tools/run_live_matrix.sh --fresh          # back up old evidence first
-#     sudo N_UES=3 REPEATS=3 ./tools/run_live_matrix.sh # 3x repeats for latency stats
+#     sudo N_UES=9 REPEATS=5 ./tools/run_live_matrix.sh # the report's setup
 #
 # Prereqs you own (the script does NOT change them):
 #   - free5GC built & provisioned with >= N subscribers (imsi-20893000000000{1..N})
@@ -30,7 +30,7 @@ LOGDIR="$ROOT/live_logs"
 PYTHON="${PYTHON:-python3}"
 EVIDENCE="$ROOT/attack_evidence.jsonl"
 
-N_UES="${N_UES:-3}"              # testbed size; L3 rate cap (config max=2) bites when N_UES>2
+N_UES="${N_UES:-9}"              # testbed size; L3 rate cap (config max=3) bites when N_UES>3
 REPEATS="${REPEATS:-3}"         # repeats per cell (>=3 so latency p50/p95 have samples)
 READY_TIMEOUT="${READY_TIMEOUT:-90}"   # how long to wait for N sessions to come up
 SETTLE="${SETTLE:-20}"          # extra margin after sessions report active, before the attack

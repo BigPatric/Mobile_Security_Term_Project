@@ -66,34 +66,20 @@ session is really gone from the SMF — no mocks, no "the tool was called" count
 
 ## Results
 
-Live runs, 3 attack scenarios × 6 defense modes, plus 4 benign operator tasks
-(full tables in [RESULTS.md](docs/evaluation/RESULTS.md)):
+Live on free5GC + UERANSIM (nine UEs, each run checked against the SMF's real state):
 
-| Mode | Identifier leakage | Sessions released per attack | Benign FP |
-|---|---|---|---|
-| No gateway | 1.00 | 2.00 | — |
-| RBAC allow-list | 1.00 | 2.00 | 0.00 |
-| L1 only | **0.00** | 2.00 | — |
-| L1 + L2 | 0.00 | 1.00 (DOS-02 still passes fully) | — |
-| **L1 + L2 + L3 (full)** | **0.00** | **1.00** (DOS-01 blocked, DOS-02 capped) | **0.00** |
+- **RBAC is no better than no defense**: every malicious call is one the agent is allowed to make.
+- **L1** cuts identifier leakage from 100% to 0%.
+- **L2** blocks the plain injected DoS, but a forged authorization string gets past it
+  (*taint laundering*). **L3** still caps that attack at its rate budget (3 of 9 sessions).
+- **No false positives** on the benign tasks, with a median overhead of about 0.03 ms per call.
 
-- **RBAC scores the same as having no defense**, because every malicious call is
-  one the agent is allowed to make.
-- **L1** brings identifier leakage from 100% to 0%.
-- **L2** blocks the injected DoS, but a forged authorization string gets past it
-  (*taint laundering*). **L3** still caps the damage, and the ablation shows every layer is needed.
-- **No false positives** on legitimate operations, including an authorized
-  single release.
-- **Overhead:** p50 ≈ 0.03 ms per call. The tail (p95 ≈ 8 ms) is a single core
-  round-trip from L3's precheck, and only high-risk calls make it.
-
-Offline tests also show the engine is **general**: a new procedure, a new tool,
-or an attack variant we never wrote a rule for is handled by changing config,
-not code ([GENERALITY_PROOF.md](docs/evaluation/GENERALITY_PROOF.md)). A synthetic
-rate-cap sweep maps the ASR / false-positive trade-off
-([EVAL_CURVE.md](docs/evaluation/EVAL_CURVE.md)), and adaptive attackers are used to
-mark exactly where the defense stops holding
-([ADVERSARIAL_BOUNDARY.md](docs/evaluation/ADVERSARIAL_BOUNDARY.md)).
+Full numbers are in the [final report](docs/final_report/final_report.pdf) and
+[RESULTS.md](docs/evaluation/RESULTS.md). Offline experiments show that new procedures
+and tools are protected by changing config alone
+([GENERALITY_PROOF.md](docs/evaluation/GENERALITY_PROOF.md)), map the rate-cap
+trade-off ([EVAL_CURVE.md](docs/evaluation/EVAL_CURVE.md)), and mark where the defense
+stops holding ([ADVERSARIAL_BOUNDARY.md](docs/evaluation/ADVERSARIAL_BOUNDARY.md)).
 
 ## Conclusion
 
@@ -105,11 +91,12 @@ tool-call boundary**, not in the model. Each layer closes a different hole:
 - **L3** protects procedure integrity, and it is the one layer that still holds
   when an authorization can be forged, stolen or misused by an insider.
 
-The gateway beats RBAC, causes no false positives and adds negligible latency.
+The gateway beats RBAC, causes no false positives on the benign tasks and adds negligible latency.
 
 **Limits we keep in view:** L3's rate check *bounds* bulk abuse rather than
 eliminating it (out-of-order operations, such as a double release, are blocked
-completely). Authorization is still an in-band claim, and a signed, gateway-verifiable
+completely), a rate cap low enough to matter also blocks legitimate bulk maintenance, and
+slow-drip attacks evade it. Authorization is still an in-band claim, and a signed, gateway-verifiable
 capability is future work. The agent is a scripted worst-case control rather than a
 real LLM. See the roadmap in [DESIGN.md](docs/architecture/DESIGN.md).
 

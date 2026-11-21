@@ -5,7 +5,7 @@
 **Related:** [RESULTS.md](RESULTS.md) (live point results) · [ADVERSARIAL_BOUNDARY.md](ADVERSARIAL_BOUNDARY.md) (boundary)
 
 This turns ASR / FP from "three hand-written cases" into "a swept curve".
-[generator.py](../../benchmark/generator.py) produces 16 traces with **intent labels**
+[generator.py](../../benchmark/generator.py) produces 15 traces (8 benign, 7 malicious) with **intent labels**
 (benign / malicious, including the hardest case: legitimate bulk maintenance).
 [eval_curve.py](../../tools/eval_curve.py) replays every trace through the **real PolicyEngine**
 against a fake core and measures "attack effect vs. false blocks" across a range of rate caps.

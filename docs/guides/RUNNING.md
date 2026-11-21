@@ -40,10 +40,10 @@ Use three terminals and keep each one running:
 ```bash
 cd free5gc  && sudo ./run.sh                                          # 1: core
 cd UERANSIM && sudo ./build/nr-gnb -c config/free5gc-gnb.yaml         # 2: gNB
-cd UERANSIM && sudo ./build/nr-ue  -c config/free5gc-ue.yaml -n 3 -t 2000   # 3: 3 UEs
+cd UERANSIM && sudo ./build/nr-ue  -c config/free5gc-ue.yaml -n 9 -t 2000   # 3: 9 UEs, 2 s apart
 ```
 
-DOS-02 needs **at least cap+1 sessions** (3 UEs with the default `rate.max = 2`) for L3's cap to show.
+DOS-02 needs **at least cap+1 sessions** for L3's cap to show (the report uses 9 UEs with `rate.max = 3`).
 
 ## 3. Single live runs
 
@@ -71,7 +71,7 @@ python3 run_attack_demo.py --scenario DOS-02  --gateway on --layers L1,L2   # ab
 
 ```bash
 sudo ./tools/run_live_matrix.sh --fresh             # each cell restarts to a full N-session core
-sudo N_UES=3 REPEATS=3 ./tools/run_live_matrix.sh   # repeats for tighter latency stats
+sudo N_UES=9 REPEATS=5 ./tools/run_live_matrix.sh   # the report's setup (130 runs)
 python3 tools/aggregate.py --csv results/results attack_evidence.jsonl  # → RESULTS.md tables + results/*.csv
 ```
 
