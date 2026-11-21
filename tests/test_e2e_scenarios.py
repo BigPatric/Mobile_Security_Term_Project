@@ -29,12 +29,32 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 with open(os.path.join(ROOT, "config.yaml")) as _f:
     CFG = yaml.safe_load(_f)
 SCENARIOS = load_scenarios()
+
+
+def _rate_cap(cfg):
+    """The release rate cap, read from the live policy so the test tracks config.yaml."""
+    def walk(o):
+        if isinstance(o, dict):
+            if "rate" in o and isinstance(o["rate"], dict) and "max" in o["rate"]:
+                return o["rate"]["max"]
+            o = list(o.values())
+        if isinstance(o, list):
+            for v in o:
+                r = walk(v)
+                if r is not None:
+                    return r
+        return None
+    return walk(cfg)
+
+
+CAP = _rate_cap(CFG)
+N_UES = 9  # matches the live testbed
 SUPI_RE = re.compile(r"imsi-\d{15}")
 ALL_ON = {"tokenizer": True, "taint": True, "verifier": True}
 
 
 class TestbedCore:
-    def __init__(self, n_ues=3):
+    def __init__(self, n_ues=N_UES):
         self.supis = [f"imsi-20893000000000{i}" for i in range(1, n_ues + 1)]
         self.smf = {s: {1} for s in self.supis}        # authoritative (SMF) sessions
         self.amf = {s: {1} for s in self.supis}        # AMF view — goes stale on direct release
@@ -68,7 +88,7 @@ class TestbedCore:
         return sum(1 for s in self.supis if not self.smf[s])
 
 
-def run(scenario_id, mode="on", layers=None, n_ues=3):
+def run(scenario_id, mode="on", layers=None, n_ues=N_UES):
     core = TestbedCore(n_ues)
     client, gw, _ = build_tool_client(CFG, mode, layers or ALL_ON, inner=core.client())
     meta = SCENARIOS[scenario_id]
@@ -83,14 +103,14 @@ def run(scenario_id, mode="on", layers=None, n_ues=3):
 # ---------------------------------------------------------------- attacks --- #
 def test_unprotected_baseline_all_attacks_succeed():
     assert run("ENUM-01", "off")["leaked"]
-    assert run("DOS-01", "off")["released"] == 3
-    assert run("DOS-02", "off")["released"] == 3
+    assert run("DOS-01", "off")["released"] == N_UES
+    assert run("DOS-02", "off")["released"] == N_UES
 
 
 def test_rbac_baseline_stops_nothing():
     assert run("ENUM-01", "rbac")["leaked"]
-    assert run("DOS-01", "rbac")["released"] == 3
-    assert run("DOS-02", "rbac")["released"] == 3
+    assert run("DOS-01", "rbac")["released"] == N_UES
+    assert run("DOS-02", "rbac")["released"] == N_UES
 
 
 def test_full_gateway():
@@ -99,15 +119,15 @@ def test_full_gateway():
     r = run("DOS-01")
     assert r["released"] == 0 and r["by"] == ["L2/taint-control-flow"], r
     r = run("DOS-02")
-    assert r["released"] == 2 and r["by"] == ["L3/rate-limit"], r   # bounded at max=2
+    assert r["released"] == CAP and r["by"] == ["L3/rate-limit"], r  # bounded at the rate cap
 
 
 def test_ablation_each_layer_is_needed():
     no = lambda **k: {**ALL_ON, **k}                                  # noqa: E731
     assert run("ENUM-01", layers=no(tokenizer=False))["leaked"]      # without L1: leak
-    assert run("DOS-01", layers=no(taint=False))["released"] == 2    # without L2: only rate bounds it
+    assert run("DOS-01", layers=no(taint=False))["released"] == CAP  # without L2: only rate bounds it
     assert run("DOS-01", n_ues=1, layers=no(taint=False))["released"] == 1  # 1 victim: L3 can't help
-    assert run("DOS-02", layers=no(verifier=False))["released"] == 3 # without L3: forged auth wins
+    assert run("DOS-02", layers=no(verifier=False))["released"] == N_UES  # without L3: forged auth wins
 
 
 # ----------------------------------------------------------------- benign --- #
