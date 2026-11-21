@@ -2,10 +2,8 @@
 # Secure MCP Gateway — Project Configuration
 # ============================================================
 
-# Agent Mode:
-#   "simple" : Simple ReAct logic (Scripted Thought/Action, NO external API key needed!)
-#   "llm"    : External LLM API (Gemini)
-agent_mode: "simple"
+# Agent: a deterministic, scripted ReAct loop (agent/react_agent.py) that always
+# obeys directives in untrusted alerts -- the worst case. No LLM API key is needed.
 
 # 5G Core Backend:
 #   LIVE mode: calls free5GC WebConsole REST API & runs UERANSIM nr-cli
