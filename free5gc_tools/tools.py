@@ -278,13 +278,13 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int, **_gw_meta
         time.sleep(0.8)
         if not smf_released:
             try:
-                if not cs.ue_pdu_session_info(sm_context_ref):
+                if cs.smf_context_gone(sm_context_ref) is True:   # 404 only, never on error
                     smf_released = True
             except cs.CoreUnavailable:
                 pass
         if not cp_released:
             try:
-                if not cs.amf_session_active(ns, psi):
+                if cs.amf_session_gone(ns, psi) is True:          # never on error
                     cp_released = True
             except cs.CoreUnavailable:
                 pass

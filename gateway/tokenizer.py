@@ -103,6 +103,17 @@ class IdentifierTokenizer:
         """Return a copy of tool ARGS with all tokens restored to real SUPIs."""
         return self._walk(obj, self.detokenize_text)
 
+    def detokenize_fields(self, args: Dict[str, Any], fields) -> Dict[str, Any]:
+        """Restore tokens ONLY in the named identifier arguments.
+
+        Any other argument (free text, a report body, a ticket comment) keeps its
+        tokens as-is. Otherwise a compromised agent could paste tokens into a
+        free-text argument of an outbound tool and have the gateway turn them
+        back into real SUPIs for it (a confused deputy)."""
+        fields = set(fields)
+        return {k: (self._walk(v, self.detokenize_text) if k in fields else v)
+                for k, v in (args or {}).items()}
+
     def redact_text(self, text: str) -> str:
         """Like tokenize_text, but NEVER mints: a SUPI this gateway already
         tokenized becomes its token; any other SUPI (e.g. one an injected log
