@@ -34,6 +34,7 @@ N_UES="${N_UES:-3}"              # testbed size; L3 rate cap (config max=2) bite
 REPEATS="${REPEATS:-3}"         # repeats per cell (>=3 so latency p50/p95 have samples)
 READY_TIMEOUT="${READY_TIMEOUT:-90}"   # how long to wait for N sessions to come up
 SETTLE="${SETTLE:-20}"          # extra margin after sessions report active, before the attack
+UE_TEMPO="${UE_TEMPO:-2000}"    # ms between each UE start (nr-ue -t: avoids concurrent-PFCP drop)
 SMF_HOST="127.0.0.2"; SMF_PORT="8000"
 GNB_CFG="$UERANSIM/config/free5gc-gnb.yaml"
 UE_CFG="$UERANSIM/config/free5gc-ue.yaml"
@@ -94,15 +95,20 @@ bringup() {
     y "  SMF SBI ($SMF_HOST:$SMF_PORT) did not come up — see $LOGDIR/free5gc.log"
     return 1
   fi
-  sleep 3                                         # let the other NFs register with the NRF
+  sleep 10                                         # let the other NFs register with the NRF
   c "  [2/3] starting gNB…"
   ( "$UERANSIM/build/nr-gnb" -c "$GNB_CFG" > "$LOGDIR/gnb.log" 2>&1 ) &
-  sleep 3
-  c "  [3/3] starting $N_UES UE(s)…"
-  ( "$UERANSIM/build/nr-ue" -c "$UE_CFG" -n "$N_UES" > "$LOGDIR/ue.log" 2>&1 ) &
+  sleep 10
+  c "  [3/3] starting $N_UES UE(s) (-t ${UE_TEMPO}ms apart)…"
+  # -t/--tempo staggers each UE's start by UE_TEMPO ms. Without it, N UEs fire their
+  # PDU Session Establishment Requests simultaneously and free5GC's SMF/UPF drops one
+  # under the concurrent-PFCP burst — that UE then retransmits against a half-open
+  # context forever (T3580), so we'd only ever see N-1 active sessions.
+  ( "$UERANSIM/build/nr-ue" -c "$UE_CFG" -n "$N_UES" -t "$UE_TEMPO" > "$LOGDIR/ue.log" 2>&1 ) &
   # Wait until the sessions are actually up (the signal the demo gates on).
   # Non-fatal: if it times out we still settle + attempt, and the demo itself
   # honestly aborts (exit 2) if the core really is not ready.
+  sleep 10
   if "$PYTHON" "$ROOT/tools/_wait_sessions.py" --need "$N_UES" --timeout "$READY_TIMEOUT"; then
     g "  sessions up; settling ${SETTLE}s before the attack…"
   else

@@ -28,8 +28,9 @@ ueransim:
 smf:
   sbi_url: "http://127.0.0.2:8000"
 
-# NRF access-token endpoint. free5GC SBI is OAuth2-protected (nrfcfg oauth: true),
-# so the SMF release requires an NRF-signed token with scope 'nsmf-pdusession'.
+# NRF access-token endpoint. Only used when free5GC SBI is OAuth2-protected
+# (nrfcfg oauth: true); the evaluated testbed runs with oauth: false, so the SMF
+# release needs no token. When enabled it requires scope 'nsmf-pdusession'.
 # The agent presents a registered NF identity whose per-instance certificate the
 # NRF trusts (cert_dir is scanned for cert/<nftype>_<uuid>.pem). Set `consumer`
 # to pin a specific identity instead of auto-detecting.
@@ -85,10 +86,13 @@ gateway:
           - identifier
           - provenance: {allow_authorized: true}
           - fsm: {procedure: pdu_session, event: release}
-          # Bulk-teardown cap. On a small testbed set max = (#sessions - 1) so the
-          # bulk trips while one legitimate release still passes. Not exempt for
-          # authorized callers: this is what catches DOS-02's forged authorization.
-          - rate: {bucket: pdu_release, max: 2, window_sec: 60, exempt_authorized: false}
+          # Bulk-teardown cap. Set to a fixed operator-normal release ceiling
+          # (what a legitimate NOC agent would ever do in a minute), NOT tied to
+          # testbed size: that way a bulk DOS trips after `max` releases regardless
+          # of N, so blocked-fraction = 1 - max/N improves as the network grows.
+          # max=3 leaves headroom above a single legitimate release (FP stays 0).
+          # Not exempt for authorized callers: this is what catches DOS-02's forged authorization.
+          - rate: {bucket: pdu_release, max: 3, window_sec: 60, exempt_authorized: false}
           # Ground truth: the gateway itself asks the core that this session
           # exists before forwarding (placed after rate so a bulk attack can't
           # make the gateway hammer the core with prechecks).
