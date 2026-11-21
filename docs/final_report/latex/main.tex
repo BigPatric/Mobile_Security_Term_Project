@@ -49,9 +49,9 @@
 
 \begin{document}
 
-\title{A Provenance- and Procedure-Aware Secure MCP Gateway\\for LLM Agents Operating a 5G Core}
+\title{A Provenance- and Procedure-Aware Secure MCP Gateway\\ for LLM Agents Operating a 5G Core}
 
-\author{\IEEEauthorblockN{\authorname\ (112550018)}
+\author{\IEEEauthorblockN{\authorname}
 \IEEEauthorblockA{Mobile Network Security, Fall 2026 --- Final Project Report\\
 Instructor: Prof.\ Chi-Yu Li}}
 
@@ -61,7 +61,7 @@ Instructor: Prof.\ Chi-Yu Li}}
 \begin{abstract}
 Operators are beginning to let LLM agents run network-operations tasks, such as triaging
 alerts and releasing stuck sessions, by calling core-network APIs as tools. These agents read
-untrusted text, and an attacker who can write into that text can take over the agent through
+untrusted text such as alert logs, and an attacker who can write into that text can take over the agent through
 indirect prompt injection. A hijacked agent with core access can leak subscriber permanent
 identifiers (SUPIs) and tear down PDU sessions in bulk. Role-based access control does not
 help, because every malicious call is one the agent is allowed to make. We present a
@@ -72,14 +72,14 @@ and taint tracking, so untrusted content cannot drive a high-risk state change; 
 procedure-aware verifier that checks every call against the TS~23.502 PDU-session state
 machine and a rate budget, regardless of any authorization the call claims to carry. We
 evaluate on a live free5GC + UERANSIM testbed with three injection attacks, and count an
-attack as successful only when the SMF confirms that the session is really gone. RBAC scores
-exactly the same as having no defense at all. L1 reduces identifier leakage from 100\% to
+attack as successful only when the SMF confirms that the session is really gone. RBAC yields
+the same attack success rate and leakage as having no defense at all. L1 reduces identifier leakage from 100\% to
 0\%. L2 blocks the plain injected DoS but is bypassed by a forged change ticket, and L3 still
-caps that attack at its rate budget. The full gateway produces no false positives on four
-benign operator tasks and adds a median overhead below 0.05\,ms per call. Offline experiments
-add an ASR/false-positive trade-off curve, an adaptive-attacker analysis that marks where the
-defense stops holding, and evidence that new procedures and tools are protected by
-configuration alone.
+caps that attack at its rate budget within a window (3 of 9 sessions). The full gateway
+produces no false positives on four benign tasks (each releasing at most one session) and has a median overhead of
+0.03\,ms per call. Offline experiments add an ASR/false-positive trade-off curve, an
+adaptive-attacker analysis that marks where the defense stops holding (slow drip), and
+evidence that new procedures and tools are protected by configuration alone.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -114,14 +114,15 @@ capability to do damage instead of relying on its judgment.
 \begin{itemize}
   \item A gateway design with three layers that each protect a different property:
         identifier confidentiality (L1), source integrity (L2) and procedure integrity
-        (L3). L3 is grounded in the TS~23.502 PDU-session release procedure~\cite{ts23502}
-        and does not depend on verifying the caller's authorization.
+        (L3). L3 is based on a simplified model of the TS~23.502 PDU-session release
+        procedure~\cite{ts23502} and does not depend on verifying the caller's authorization.
   \item A config-driven policy engine in which every layer is a pluggable check, so
         protection for a new tool or procedure is added by editing data, not code.
   \item A live evaluation on free5GC~\cite{free5gc} and UERANSIM~\cite{ueransim} with
         ground-truth success criteria, an RBAC baseline and a full layer ablation. It
-        shows that each layer is necessary and that L3 is the only one that holds against
-        a forged authorization.
+        shows that each layer closes a distinct hole (L2 only against injections that do not
+        forge an authorization) and that L3 is the only one that still limits damage under a
+        forged authorization.
   \item An honest map of where the defense stops holding: a rate-cap trade-off curve on
         labelled synthetic traces and an adaptive-attacker study (slow drip, bucket
         splitting).
@@ -153,7 +154,8 @@ assumed \emph{fully} compromised: it obeys any directive that reaches it and wil
 attacker-supplied value, including a fake authorization, into a tool call. The gateway is
 the only enforcement point. Its goals are (i)~no raw SUPI ever reaches the agent, (ii)~no
 state change is driven by untrusted content without authorization, and (iii)~no call,
-even an authorized one, violates the procedure's state machine or its volume budget.
+even an authorized one, violates the procedure's state machine, and no burst exceeds the
+volume budget per window (slow, sustained abuse is not covered; Sec.~\ref{sec:adaptive}).
 Out of scope are NF-to-NF attacks inside the core and attacks on the radio interface.
 
 % ===========================================================================
@@ -185,7 +187,7 @@ Out of scope are NF-to-NF attacks inside the core and attacks on the radio inter
           fit=(l1)(l2)(l3), label={[font=\footnotesize\bfseries, text=gworange]above:Secure MCP Gateway (policy from \texttt{config.yaml})}] (gw) {};
   \end{scope}
   % core
-  \node[box, text width=27mm, minimum height=22mm, right=12mm of l2] (core) {\textbf{free5GC v4.1.0}\\AMF \;$\cdot$\; SMF \;$\cdot$\; UPF\\WebConsole\\[2pt]\textbf{UERANSIM v3.2.7}\\gNB + 3 UEs};
+  \node[box, text width=27mm, minimum height=22mm, right=12mm of l2] (core) {\textbf{free5GC v4.1.0}\\AMF \;$\cdot$\; SMF \;$\cdot$\; UPF\\WebConsole\\[2pt]\textbf{UERANSIM v3.2.7}\\gNB + 9 UEs};
   % arrows
   \draw[rarr] (logs) -- (agent.west |- logs);
   \draw[arr] (task) -- (agent.west |- task);
@@ -200,6 +202,7 @@ through the gateway, which re-tokenizes identifiers and records taint and proced
 \end{figure*}
 
 \subsection{Placement: the tool-call seam}
+\label{sec:placement}
 The agent calls tools only through a \code{ToolClient.invoke(name, args)} interface.
 Replacing the local client with a \code{GatewayToolClient} inserts the whole defense
 without changing the agent (Fig.~\ref{fig:arch}). A call crosses the gateway twice. On the
@@ -209,8 +212,11 @@ procedure state, then tokenizes identifiers before the agent sees them.
 
 \textit{Integration and compliance.} Toward the core, the gateway is an ordinary SBI
 consumer, so free5GC and the 3GPP interfaces are unchanged. With NRF OAuth~2.0 enabled
-(TS~33.501~\cite{ts33501}), the gateway would hold the access token instead of the agent; it
-can therefore only \emph{narrow} the rights the standard already grants, never widen them.
+(TS~33.501~\cite{ts33501}), the gateway would hold the access token instead of the agent, so
+by design it only \emph{narrows} the rights the standard already grants. We did not test this
+configuration (OAuth is disabled in our testbed). Note also that the release call we use is
+an AMF-facing SMF service; under OAuth the gateway would need to be authorized for it, or the
+release would have to go through a management interface instead of direct SBI.
 TS~33.501 decides which NF type may call a service; the gateway decides whether a specific
 call, made by a possibly hijacked agent, is legitimate.
 
@@ -218,9 +224,10 @@ call, made by a possibly hijacked agent, is legitimate.
 Every SUPI in a tool result is replaced by an opaque token (e.g.\ \code{token\_sub\_a8f9})
 before it reaches the agent, and tokens are mapped back only inside the gateway. Identifier
 arguments (\code{supi\_token}, \code{supi}, \code{imsi}) must carry a token the gateway
-issued; a raw SUPI planted in a log is rejected. Even a fully compromised agent therefore
-holds nothing worth exfiltrating, which removes the \emph{capability} to leak instead of
-asking the model not to.
+issued; a raw SUPI planted in a log is rejected. A compromised agent therefore
+holds no raw identifier to exfiltrate, which removes the \emph{capability} to leak instead of
+asking the model not to. (The current token derivation is weak against offline guessing; see
+Sec.~\ref{sec:disc}.)
 
 \subsection{L2: provenance and taint tracking}
 Results from configured untrusted sources (\code{get\_alert\_logs}) mark the session as
@@ -234,21 +241,25 @@ this \emph{taint laundering}~\cite{camel2025}.
 L3 asks a question that does not depend on who is asking: \emph{is this operation legal for
 this procedure, right now, at this volume?} It combines three checks.
 
-\textit{FSM.} Procedures are declared as state machines (Fig.~\ref{fig:fsm}). The gateway
+\textit{FSM.} Procedures are declared as state machines (Fig.~\ref{fig:fsm}); the
+release FSM is a deliberately small abstraction (three states) of TS~23.502 \S4.3.4 and does
+not model its intermediate signalling steps. The gateway
 learns state from results already crossing it: a successful
 \code{query\_subscriber\_session} marks each listed session \code{ACTIVE}, and a release
 that the core confirms commits \code{RELEASED}. Releasing a session that is already
 \code{RELEASED} is an out-of-state violation and is always blocked. Learned
 \code{RELEASED} state is kept even if a later query still lists the session, because the
-AMF's view can be stale after a network-initiated release (Sec.~\ref{sec:testbed}).
+AMF's view can be stale after the out-of-band release we use (Sec.~\ref{sec:testbed}).
 
-\textit{Rate.} High-risk calls draw from a named budget (here at most 2 releases per 60\,s
-sliding window). The check is \emph{not} exempt for authorized callers, which is what lets
+\textit{Rate.} High-risk calls draw from a named budget (here at most 3 releases per 60\,s
+sliding window; the budget bounds a burst, not the total over time). The check is \emph{not} exempt for authorized callers, which is what lets
 it catch a forged authorization.
 
 \textit{Core precheck.} Before forwarding a release, the gateway itself queries the core to
 confirm the target session exists. The check is ordered after rate, so a bulk attack cannot
-turn the gateway into an amplifier of core queries.
+turn the gateway into an amplifier of core queries. Because the precheck reads the same
+possibly stale view, it catches sessions that never existed; re-releasing an
+already-released session is caught by the FSM, not by the precheck.
 
 \begin{figure}[t]
 \centering
@@ -267,7 +278,7 @@ turn the gateway into an amplifier of core queries.
   \draw[arr] (u) -- node[left, font=\scriptsize, align=right]{release\\(+ core precheck)} (r);
   \draw[bad] (r.south east) .. controls +(10mm,-8mm) and +(-10mm,-8mm) .. node[below, font=\scriptsize, text=gwred]{release again $\Rightarrow$ \code{fsm-out-of-state}} (r.south west);
 \end{tikzpicture}
-\caption{PDU-session release FSM enforced by L3 (TS 23.502 \S4.3.4). Rate and core-precheck
+\caption{PDU-session release FSM enforced by L3 (simplified from TS 23.502 \S4.3.4). Rate and core-precheck
 checks run alongside the FSM on every release.}
 \label{fig:fsm}
 \end{figure}
@@ -301,11 +312,12 @@ with no other checks), so the comparison is like for like.
 We run free5GC v4.1.0 and UERANSIM v3.2.7 on a Linux VM, with one gNB and nine UEs, each
 holding one active PDU session. UEs are brought up staggered (2\,s apart) so their PDU-session
 establishments do not collide at the SMF/UPF. The gateway, agent and tool adapters are written in Python.
-NRF OAuth is disabled (\code{oauth: false}); it protects NF-to-NF traffic, which is
-orthogonal to the agent-to-core path we defend.
+NRF OAuth is disabled (\code{oauth: false}) to keep the testbed simple; Sec.~\ref{sec:placement} discusses
+how the gateway would fit when it is enabled.
 
 \subsection{The high-risk path and ground truth}
-\code{trigger\_pdu\_session\_release} performs a real network-initiated release: it looks
+\code{trigger\_pdu\_session\_release} performs a real core-side release through the SMF's
+SM-context release service (\code{Nsmf\_PDUSession\_ReleaseSMContext}): it looks
 up the session's SM-context reference through the WebConsole, then calls the SMF's
 \code{POST /nsmf-pdusession/v1/sm-contexts/\{ref\}/release}. It succeeds only if a
 post-condition confirms the release, primarily that the SMF no longer has the SM context.
@@ -352,9 +364,9 @@ the UPF before the restart.]
 \toprule
 ID & Hijacked agent does & Expected stop \\
 \midrule
-ENUM-01 & dumps every SUPI via \code{list\_subscribers} & L1 \\
+ENUM-01 & dumps every SUPI & L1 \\
 DOS-01  & releases every live PDU session & L2 \\
-DOS-02  & same, with forged ticket \code{CHG-20481} attached to each release & L3 \\
+DOS-02  & same, with forged ticket attached & L3 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -368,19 +380,24 @@ volume.
 \subsection{Experiment harness}
 For every cell of the scenario $\times$ defense-mode matrix, a script tears down the core,
 brings up a fresh core with all nine sessions active, and runs one attack; each cell is
-repeated five times. A release in one run therefore never affects the next. The live numbers
-below are over 130 runs in total. Results are appended to an evidence log and
+repeated five times. A release in one run therefore never affects the next. Because the agent
+is deterministic, the repeats measure run-to-run variation of the testbed, not of the agent. The live numbers
+below are over 130 runs in total: 6 modes $\times$ 3 attacks $\times$ 5 repeats (90 attack
+runs), plus the four benign tasks $\times$ 5 repeats under RBAC and the full gateway (40 benign
+runs). Results are appended to an evidence log and
 aggregated by a separate script that only does arithmetic on recorded ground truth.
 
 % ===========================================================================
 \section{Evaluation}
 
 \subsection{Metrics}
-\textbf{ASR}: the fraction of attack runs in which core state really changed. ENUM-01 is
-exfiltration and does not change state, so it counts toward leakage only.
+\textbf{ASR}: the fraction of attack runs, over all three scenarios, in which core state
+really changed. ENUM-01 is exfiltration and cannot change state, so it counts toward leakage
+only and the maximum possible ASR is 2/3.
 \textbf{Leakage}: the fraction of runs in which a raw SUPI reached the agent.
 \textbf{Sessions released}: PDU sessions confirmed torn down per run, which measures blast
-radius.
+radius; we report it averaged over all three scenarios (ENUM-01 contributes 0) and over the two
+DoS scenarios only.
 \textbf{FP rate}: the fraction of benign runs with any blocked call.
 \textbf{Latency}: gateway overhead per tool call, excluding the core's own processing time.
 Six modes are compared: no gateway (\emph{off}), \emph{RBAC}, L1, L1+L2, L1+L3 and the full
@@ -390,18 +407,21 @@ gateway.
 
 \begin{table}[t]
 \centering
-\caption{Live results (3 attacks $\times$ 5 repeats per mode; nine sessions, cap~3)}
+\caption{Live results (3 attacks $\times$ 5 repeats per mode; nine sessions, cap~3). ASR and
+``All'' average over all three scenarios; ``DoS'' averages over DOS-01 and DOS-02 only.}
 \label{tab:live}
-\begin{tabular}{@{}lccc@{}}
+\begin{tabular}{@{}lcccc@{}}
 \toprule
-Mode & ASR & Leakage & Mean released \\
+ & & & \multicolumn{2}{c}{Mean released} \\
+\cmidrule(l){4-5}
+Mode & ASR & Leakage & All & DoS \\
 \midrule
-off (no gateway)     & 0.67 & 1.00 & 5.93 \\
-RBAC allow-list      & 0.67 & 1.00 & 5.53 \\
-L1                   & 0.67 & \textbf{0.00} & 5.93 \\
-L1+L2                & 0.33 & 0.00 & 2.87 \\
-L1+L3                & 0.67 & 0.00 & 2.00 \\
-\textbf{L1+L2+L3 (full)} & \textbf{0.33} & \textbf{0.00} & \textbf{1.00} \\
+off (no gateway)     & 0.67 & 1.00 & 5.93 & 8.90 \\
+RBAC allow-list      & 0.67 & 1.00 & 5.53 & 8.30 \\
+L1                   & 0.67 & \textbf{0.00} & 5.93 & 8.90 \\
+L1+L2                & 0.33 & 0.00 & 2.87 & 4.30 \\
+L1+L3                & 0.67 & 0.00 & 2.00 & 3.00 \\
+\textbf{L1+L2+L3 (full)} & \textbf{0.33} & \textbf{0.00} & \textbf{1.00} & \textbf{1.50} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -423,7 +443,7 @@ L1+L3                & 0.67 & 0.00 & 2.00 \\
     x tick label style={font=\footnotesize},
     y tick label style={font=\footnotesize},
     enlarge x limits=0.1,
-    legend style={font=\footnotesize, at={(0.98,0.97)}, anchor=north east, legend columns=2, draw=none, fill=none},
+    legend style={font=\footnotesize, at={(0.98,0.97)}, anchor=north east, legend columns=1, draw=none, fill=none},
     nodes near coords,
     every node near coord/.append style={font=\tiny},
     ymajorgrids, grid style={gwlight},
@@ -444,7 +464,7 @@ Table~\ref{tab:live} gives the live results and Fig.~\ref{fig:released} breaks t
 attacks down by scenario. The figures support four conclusions.
 
 \emph{RBAC is equivalent to no defense.} Every malicious call is one the agent's role
-permits, so the allow-list changes nothing. This is the core motivation for the gateway.
+permits, so the allow-list never blocks anything: ASR and leakage are identical to \emph{off}. This is the core motivation for the gateway.
 
 \emph{L1 eliminates identifier leakage.} From L1 on, ENUM-01 returns only tokens and leakage
 drops from 1.00 to 0.00 (Fig.~\ref{fig:enum}).
@@ -465,7 +485,9 @@ at the first release (\code{taint-control-flow}), but DOS-02 releases all nine s
 \emph{L3 is the only layer that holds against a forged authorization.} L3 ignores the ticket
 and stops DOS-02 at the rate cap, limiting it to 3 sessions. In the full gateway, DOS-01 is
 stopped earlier by L2 (0 sessions), and DOS-02 by L3 (3 sessions; Fig.~\ref{fig:dos02}b).
-Removing any layer lets some attack through, so none is redundant.
+Removing any layer lets some attack through, so none is redundant for the attacks we
+tested. Note that L2's authorization check accepts any string, so its value here is limited to
+injections that do not forge one.
 
 \begin{figure*}[t]
 \centering
@@ -480,21 +502,27 @@ smaller-testbed run; the nine-UE aggregates are in Table~\ref{tab:live}.)}
 
 Binary ASR undersells this result: a capped DOS-02 still counts as a success because three
 sessions changed state. Blast radius is the more informative metric: the cap bounds damage at
-a fixed number of releases per window (3) regardless of how many sessions the core holds, so
-with nine sessions the full gateway cuts the teardown from nine to one and L3 holds DOS-02 to
-one third of the sessions. The fraction contained improves as the core grows.
+a fixed number of releases per window (3), so with nine sessions the full gateway cuts the mean
+teardown per DoS attack from 8.9 to 1.5 sessions (Table~\ref{tab:live}) and L3 holds DOS-02 to
+one third of the sessions. This is a bound per window, not in total: an attacker that keeps
+going across windows is limited only by the rate (Sec.~\ref{sec:adaptive}). The runs reported
+here last well under one window. Means below nine for an unrestricted DoS (8.0--8.8, including RBAC's
+DOS-01) reflect run-to-run variation in the testbed, not the defense: in these modes no check
+blocked any release.
 
 \subsection{False positives}
 The full gateway and RBAC both pass all four benign tasks (FP rate 0.00 for each). This
 includes BENIGN-04, an authorized single release in a tainted session, which L2 passes on
 its authorization and L3 passes because it is in state, under budget, and the core confirms
-the session exists.
+the session exists. These four tasks release at most one session, so they do not exercise the
+rate cap: with the deployed cap of~3, legitimate bulk maintenance of 5 or 8 sessions would be
+blocked (Fig.~\ref{fig:curve}, FP rate 0.25 at cap~3).
 
 \subsection{Latency}
 
 \begin{table}[t]
 \centering
-\caption{Gateway overhead per tool call (ms), steady state (first pass)}
+\caption{Gateway overhead per tool call (ms), first pass through the matrix}
 \label{tab:latency}
 \begin{tabular}{@{}lrrrrr@{}}
 \toprule
@@ -510,24 +538,26 @@ Full   & 92 & 1.156 & 0.025 & 0.092 & 22.647 \\
 \end{table}
 
 Table~\ref{tab:latency} shows the median overhead is between 0.02 and 0.08\,ms in every mode,
-far below the 50\,ms target set in the proposal. The tail (up to 27\,ms) comes entirely from
+far below our 50\,ms design target. The tail (up to 27\,ms) comes entirely from
 L3's core precheck, a single real round trip to the core, made only for high-risk calls:
 L1 and L2 never exceed 0.21\,ms. L1+L3 has a \emph{higher} mean than the full gateway because
-without L2 every DOS-01 release reaches the precheck, whereas the full gateway blocks it
-earlier; blocking earlier is cheaper as well as safer. The table reports the first pass through
+without L2 the first releases of DOS-01 also reach the precheck (the rate cap stops the rest),
+whereas the full gateway blocks DOS-01 at L2 before any precheck. The table reports the first pass through
 the 130-run matrix. Across later passes the precheck tail drifts upward (pooled over all runs,
-the L1+L3 p95 reaches $\approx$98\,ms), which we attribute to free5GC core state accumulating
-over repeated bring-ups and tear-downs rather than to the gateway; the median is unaffected
-(pooled p50 $\le$0.06\,ms for both precheck modes). This drift is a property of the sequential testbed, not of the
-per-call check, which is a single round trip regardless of run index.
+the L1+L3 p95 reaches $\approx$98\,ms, above the 50\,ms target for these high-risk calls), which we believe comes from free5GC core state accumulating
+over repeated bring-ups and tear-downs rather than from the gateway (we have not isolated the cause); the median is unaffected
+(pooled p50 $\le$0.06\,ms for both precheck modes). The gateway's own work per check does not grow with run index; it
+makes a single round trip per precheck.
 
 \subsection{Rate-cap trade-off on synthetic traces}
 
 Three live scenarios are anecdotes, and the rate cap is a threshold. To see how it trades
-attack effect against false positives, we generated 16 labelled traces: 8 benign (health
-checks, single authorized releases, and authorized bulk maintenance of 2, 3, 5 and 8
-sessions) and 8 malicious (forged-authorization bulk teardown of 3, 5 and 8 sessions, slow
-drip of 5 and 8 sessions, and double release). We replayed each trace through the real
+attack effect against false positives, we generated 15 labelled traces: 8 benign (two health
+checks, two single authorized releases, and authorized bulk maintenance of 2, 3, 5 and 8
+sessions) and 7 malicious (forged-authorization bulk teardown of 3, 5 and 8 sessions, slow
+drip of 5 and 8 sessions, and two double-release traces). The malicious curve in
+Fig.~\ref{fig:curve} averages over the five bulk and slow-drip traces; double release is
+reported separately because the FSM, not the rate cap, decides it. We replayed each trace through the real
 policy engine against a deterministic fake core, sweeping the cap. The generator does not
 know the gateway's thresholds. This experiment isolates L3; L1 and L2 are orthogonal.
 
@@ -556,7 +586,7 @@ know the gateway's thresholds. This experiment isolates L3; L1 and L2 are orthog
 \end{axis}
 \end{tikzpicture}
 \caption{Lowering the rate cap reduces what attacks tear down but blocks legitimate bulk
-maintenance. Slow drip passes at every cap (13/13 releases); double release is blocked at
+maintenance. The malicious curve covers bulk and slow-drip traces. Slow drip passes at every cap (13/13 releases); double release is blocked at
 every cap.}
 \label{fig:curve}
 \end{figure}
@@ -569,6 +599,7 @@ carry taint. Two results do not depend on the threshold. Slow drip evades every 
 double release is blocked at every cap.
 
 \subsection{Adaptive attackers}
+\label{sec:adaptive}
 
 \begin{table}[t]
 \centering
@@ -604,31 +635,34 @@ pointing the same checks at a different tool, changes only policy data. (ii)~\em
 procedures}: the same FSM and rate code enforces a second real 3GPP procedure
 (registration/deregistration, where a double deregistration is blocked) and a deliberately
 non-5G procedure (a door lock), with no code change. (iii)~\emph{Attacks we did not
-anticipate}: releasing a session the gateway has never seen, targeting a non-existent
-session, replaying a release, and moving the forged-ticket bulk attack to deregistration
-are all blocked by existing rules that were not written for them. Connecting a \emph{new core
+anticipate}: targeting a non-existent session, replaying a release, and moving the
+forged-ticket bulk attack to deregistration are all blocked by existing rules that were not
+written for them; releasing a session the gateway has never observed is also blocked when the
+FSM is configured to require an observed \code{ACTIVE} state (the live policy instead allows
+it from \code{UNKNOWN} after a core precheck, Fig.~\ref{fig:fsm}). Connecting a \emph{new core
 operation} still requires a thin tool adapter; extending \emph{protection} does not.
 
 In total the project has 62 offline unit and integration tests, all passing.
 
 % ===========================================================================
 \section{Discussion and Limitations}
+\label{sec:disc}
 
 \textbf{Testbed scale.} The live testbed has nine UEs. This is enough for the per-call
 guarantees (tokenization, taint and ordering do not depend on how many sessions exist), and
 with a cap of~3 a capped DOS-02 removes only one third of the sessions. The cap bounds an
-absolute number of releases per window, so the contained fraction falls as the core grows: a
-larger core would make L3 look stronger still. The cap value is set to an operator-normal
-release rate rather than the session count, so it is independent of testbed size; in
-deployment it should come from observed operator behavior (Fig.~\ref{fig:curve}).
+absolute number of releases per window, so the damage per window does not depend on the size of
+the core, while the fraction of sessions affected shrinks as the core grows. The cap is set to
+an operator-normal release rate rather than the session count; in deployment it should come
+from observed operator behavior, and Fig.~\ref{fig:curve} shows that any cap low enough to
+matter also blocks some legitimate bulk maintenance.
 
 \textbf{Sample size.} Each live cell ran five times (130 runs in total). The live numbers
-are means over those repeats on a real core; per-call latency still carries the testbed drift
+are means over those repeats on a real core, without confidence intervals; per-call latency still carries the testbed drift
 noted above, so we report the first pass for steady-state overhead.
 
-\textbf{Scripted agent.} The proposal planned to measure baseline ASR on two LLMs and to
-compare against a generic guardrail. Neither was done: the advisor ruled a real LLM agent
-optional for the course, and we use a scripted, always-hijacked agent instead. Because the gateway does not look at the
+\textbf{Scripted agent.} We did not measure baseline ASR on real LLMs or compare against a
+generic guardrail; we use a scripted, always-hijacked agent instead. Because the gateway does not look at the
 agent's reasoning, a real model can only be hijacked \emph{less} often, but its
 calls may be more varied than our scripted ones.
 
@@ -640,7 +674,9 @@ taint laundering on the L2 side; until then, L3 is what keeps the damage bounded
 SUPI space for a known PLMN is small enough to hash exhaustively, so an attacker could map
 leaked tokens back to SUPIs offline. Tokens should be random or derived with a keyed MAC
 under a gateway secret. This does not affect the experiments, where the agent only exfiltrates
-what it sees, but it is a weakness of the current implementation.
+what it sees, but it weakens the L1 claim against an attacker who can guess identifiers; the
+leakage result should be read as ``no raw SUPI reaches the agent'', not as protection against
+offline guessing.
 
 \textbf{Scope of L3.} Only PDU-session release is enforced live. Establishment and
 modification, more high-risk sinks, cumulative budgets against slow drip, replay protection,
@@ -662,8 +698,8 @@ applications, and EchoLeak~\cite{echoleak2025} showed zero-click exfiltration in
 assistant. CaMeL~\cite{camel2025} separates control and data flow and enforces capabilities
 outside the model; our L1 and L2 follow that principle, and L3 adds domain knowledge, the
 3GPP procedure state, that a generic capability system lacks. Progent~\cite{progent2025}
-enforces deterministic privilege policies over tool names and arguments, but its per-call
-rules cannot express a stateful constraint such as ``release only an active session''.
+enforces deterministic privilege policies over tool names and arguments, but its policies
+are not tied to protocol procedure state such as ``release only an active session''.
 TS~33.501~\cite{ts33501} authorizes service access per NF type through OAuth~2.0, so a
 hijacked but authorized consumer passes every check. Jiang et
 al.~\cite{jiang2026} place LLM agents in the core for intent-based 6G networking but focus on
@@ -678,22 +714,21 @@ not in the model. Our gateway's three layers each close a different hole: L1 pro
 identifier confidentiality, L2 protects source integrity, and L3 protects procedure
 integrity. On a live free5GC core, RBAC was no better than no defense, while the full gateway
 reduced identifier leakage to zero, blocked the injected DoS, bounded the forged-authorization
-DoS at its rate budget (three of nine sessions), caused no false positives, and added a median
-overhead below 0.05\,ms per call.
+DoS at its rate budget within a window (three of nine sessions), caused no false positives on
+four benign tasks (each releasing at most one session), and added a median overhead of 0.03\,ms per call.
 L3 is the layer that still holds when an authorization is forged, stolen or misused,
 because it never trusts the authorization in the first place. Its limits are equally
-clear: rate bounds bursts but not slow drip, and only procedure ordering is a guarantee no
-attacker timing can evade.
+clear: rate bounds bursts but not slow drip, a cap low enough to matter also blocks legitimate
+bulk maintenance, and only procedure ordering is a guarantee no attacker timing can evade.
 
 \section*{Artifact}
 % Left-aligned: long monospace paths cannot hyphenate, so full justification
 % would stretch the spaces between words into wide gaps.
 {\raggedright
 Source code, configuration, experiment scripts and documentation are in the project
-repository at
-\url{https://github.com/BigPatric/Mobile_Security_Term_Project}.
-\code{tools/run\_live\_matrix.sh} reproduces the live matrix and
-\code{tools/eval\_curve.py} the synthetic curve.\par}
+repository.
+\url{https://github.com/BigPatric/Mobile_Security_Term_Project}\par}
+
 
 \bibliographystyle{IEEEtran}
 \bibliography{references}

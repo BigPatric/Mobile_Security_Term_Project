@@ -28,8 +28,9 @@ ueransim:
 smf:
   sbi_url: "http://127.0.0.2:8000"
 
-# NRF access-token endpoint. free5GC SBI is OAuth2-protected (nrfcfg oauth: true),
-# so the SMF release requires an NRF-signed token with scope 'nsmf-pdusession'.
+# NRF access-token endpoint. Only used when free5GC SBI is OAuth2-protected
+# (nrfcfg oauth: true); the evaluated testbed runs with oauth: false, so the SMF
+# release needs no token. When enabled it requires scope 'nsmf-pdusession'.
 # The agent presents a registered NF identity whose per-instance certificate the
 # NRF trusts (cert_dir is scanned for cert/<nftype>_<uuid>.pem). Set `consumer`
 # to pin a specific identity instead of auto-detecting.

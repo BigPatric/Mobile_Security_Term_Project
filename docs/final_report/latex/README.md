@@ -43,11 +43,9 @@ Screenshots in `figures/` come from the live runs in the progress report:
 | `tex_smf_release_log.png` | LaTeX | free5GC SMF log of one release (ground truth) |
 | `tex_enum_off.png`, `tex_enum_on.png` | LaTeX | ENUM-01 without / with L1 (cropped to calls + verdict) |
 | `tex_dos02_l1l2.png`, `tex_dos02_full.png` | LaTeX | DOS-02 under L1+L2 vs the full gateway |
-| `fig_*.png` | Word | Same content, merged into single images; plus the four charts/diagrams |
 
 ## Before submitting
 
 - Live numbers come from `results_effectiveness.csv`, `results_false_positives.csv` and
   `results_latency.csv` at the repo root (nine UEs, 5 repeats, cap 3). If you rerun the live
   matrix, update Tables II–III and the bar chart (`\addplot` coordinates) together.
-  (`docs/evaluation/RESULTS.md` still holds the older three-UE run.)
