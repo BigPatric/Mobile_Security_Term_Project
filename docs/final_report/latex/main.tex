@@ -4,6 +4,7 @@
 % Packages
 % ---------------------------------------------------------------------------
 \usepackage[T1]{fontenc}
+\usepackage{microtype}         % font expansion: fewer stretched lines around long \texttt names
 \usepackage{cite}
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}          % \includegraphics for screenshots / PNG / PDF figures
@@ -49,7 +50,7 @@
 
 \begin{document}
 
-\title{A Provenance- and Procedure-Aware Secure MCP Gateway\ for LLM Agents Operating a 5G Core}
+\title{A Provenance- and Procedure-Aware Secure MCP Gateway\\for LLM Agents Operating a 5G Core}
 
 \author{\IEEEauthorblockN{\authorname}
 \IEEEauthorblockA{Mobile Network Security, Fall 2026 --- Final Project Report\\
@@ -156,8 +157,8 @@ logs. The attacker cannot modify the gateway, its configuration, or the core. Th
 assumed \emph{fully} compromised: it obeys any directive that reaches it and will copy any
 attacker-supplied value, including a fake authorization, into a tool call. The gateway is
 the only enforcement point. Its goals are (i)~no raw SUPI ever reaches the agent, (ii)~no
-state change is driven by untrusted content without authorization, meaning a capability the
-gateway issued on the trusted operator path, not any authorization text the call carries, and (iii)~no call,
+state change is driven by untrusted content unless the call carries a capability the gateway
+itself issued on the trusted operator path (authorization text alone does not count), and (iii)~no call,
 even an authorized one, violates the procedure's state machine, and no burst exceeds the
 volume budget per window (slow, sustained abuse is not covered; Sec.~\ref{sec:adaptive}).
 The attacker cannot obtain the gateway's secret or a capability the operator did not issue;
@@ -185,9 +186,10 @@ Out of scope are NF-to-NF attacks inside the core and attacks on the radio inter
   \node[box, text width=26mm, below=6mm of logs] (task) {Operator task\\\textit{(trusted)}};
   % agent
   \coordinate (inmid) at ($(logs)!0.5!(task)$);
-  \node[box, text width=24mm, minimum height=22mm, right=9mm of inmid] (agent) {LLM / ReAct\\agent\\[2pt]\textit{assumed}\\\textit{compromised}};
+  % inputs are ~28.5 mm wide, so their east edges sit ~14 mm right of inmid; 22 mm leaves an ~8 mm gap
+  \node[box, text width=24mm, minimum height=22mm, right=22mm of inmid] (agent) {LLM / ReAct\\agent\\[2pt]\textit{assumed}\\\textit{compromised}};
   % gateway layers
-  \node[layer, right=14mm of agent, yshift=11mm] (l1) {\textbf{L1 Identifier tokenizer}\\SUPI $\leftrightarrow$ opaque token};
+  \node[layer, right=19mm of agent, yshift=11mm] (l1) {\textbf{L1 Identifier tokenizer}\\SUPI $\leftrightarrow$ opaque token};
   \node[layer, below=2mm of l1] (l2) {\textbf{L2 Provenance / taint}\\untrusted-driven high-risk call $\rightarrow$ block};
   \node[layer, below=2mm of l2] (l3) {\textbf{L3 Procedure-aware verifier}\\TS 23.502 FSM + rate + core precheck};
   \begin{scope}[on background layer]
@@ -195,11 +197,11 @@ Out of scope are NF-to-NF attacks inside the core and attacks on the radio inter
           fit=(l1)(l2)(l3), label={[font=\footnotesize\bfseries, text=gworange]above:Secure MCP Gateway (policy from \texttt{config.yaml})}] (gw) {};
   \end{scope}
   % core
-  \node[box, text width=27mm, minimum height=22mm, right=12mm of l2] (core) {\textbf{free5GC v4.1.0}\\AMF \;$\cdot$\; SMF \;$\cdot$\; UPF\\WebConsole\\[2pt]\textbf{UERANSIM v3.2.7}\\gNB + 9 UEs};
+  \node[box, text width=27mm, minimum height=22mm, right=17mm of l2] (core) {\textbf{free5GC v4.1.0}\\AMF \;$\cdot$\; SMF \;$\cdot$\; UPF\\WebConsole\\[2pt]\textbf{UERANSIM v3.2.7}\\gNB + 9 UEs};
   % arrows
   \draw[rarr] (logs) -- (agent.west |- logs);
   \draw[arr] (task) -- (agent.west |- task);
-  \draw[arr] (agent.east) -- node[above, font=\scriptsize, align=center]{tool call\\\code{name(args)}} (gw.west |- agent.east);
+  \draw[arr] (agent.east) -- node[above, font=\scriptsize, align=center]{tool call\\\texttt{name(args)}} (gw.west |- agent.east);
   \draw[arr] (gw.east |- core.west) -- node[above, font=\scriptsize]{allowed} (core.west);
   \draw[arr, gwgreen] ([yshift=-6mm]core.west) -- node[below, font=\scriptsize, align=center]{precheck /\\ground truth} ([yshift=-6mm]core.west -| gw.east);
 \end{tikzpicture}
@@ -211,9 +213,9 @@ through the gateway, which re-tokenizes identifiers and records taint and proced
 
 \subsection{Placement: the tool-call seam}
 \label{sec:placement}
-The agent calls tools only through a \code{ToolClient.invoke(name, args)} interface.
-Replacing the local client with a \code{GatewayToolClient} inserts the whole defense
-without changing the agent (Fig.~\ref{fig:arch}). A call crosses the gateway twice. On the
+The agent calls every tool through a single interface,
+\code{ToolClient.invoke(name, args)}. Swapping the local client for a
+\code{GatewayToolClient} inserts the whole defense without changing the agent (Fig.~\ref{fig:arch}). A call crosses the gateway twice. On the
 way in, the gateway detokenizes identifiers and runs the tool's check chain, stopping at the
 first check that blocks. On the way out, it observes the result to update taint and
 procedure state, then tokenizes identifiers before the agent sees them.
@@ -239,8 +241,8 @@ exists only inside the gateway, so an attacker who knows the PLMN's SUPI space s
 it offline to map a token back to a subscriber.
 
 \subsection{L2: provenance and taint tracking}
-Results from configured untrusted sources (\code{get\_alert\_logs}) mark the session as
-tainted. A tainted session may not invoke a high-risk sink unless the call carries an
+A result from a tool configured as an untrusted source, here \code{get\_alert\_logs}, marks
+the session as tainted. A tainted session may not invoke a high-risk sink unless the call carries an
 operator authorization. This stops the plain injected DoS. Our first design accepted any
 non-empty \code{operator\_authorization} string, so L2 could not tell a real authorization
 from a string the attacker wrote into the log and the agent copied into the call. CaMeL calls
@@ -296,8 +298,9 @@ already-released session is caught by the FSM, not by the precheck.
   \coordinate (uamid) at ($(u)!0.5!(a)$);
   \node[st, below=11mm of uamid] (r) {\code{RELEASED}};
   \draw[arr] (u) -- node[above, font=\scriptsize]{observe: query} (a);
-  \draw[arr] (a) -- node[right, font=\scriptsize, align=left]{release\\(commit if verified)} (r);
-  \draw[arr] (u) -- node[left, font=\scriptsize, align=right]{release\\(+ core precheck)} (r);
+  % labels go on the outer side of each diagonal (below-left / below-right) so no text crosses an arrow
+  \draw[arr] (a) -- node[below right, font=\scriptsize, align=left]{release\\(commit if verified)} (r);
+  \draw[arr] (u) -- node[below left, font=\scriptsize, align=right]{release\\(+ core precheck)} (r);
   \draw[bad] (r.south east) .. controls +(10mm,-8mm) and +(-10mm,-8mm) .. node[below, font=\scriptsize, text=gwred]{release again $\Rightarrow$ \code{fsm-out-of-state}} (r.south west);
 \end{tikzpicture}
 \caption{PDU-session release FSM enforced by L3 (simplified from TS 23.502 \S4.3.4). Rate and core-precheck
@@ -339,10 +342,10 @@ NRF OAuth is disabled (\code{oauth: false}) to keep the testbed simple; Sec.~\re
 how the gateway would fit when it is enabled.
 
 \subsection{The high-risk path and ground truth}
-\code{trigger\_pdu\_session\_release} performs a real core-side release through the SMF's
-SM-context release service (\code{Nsmf\_PDUSession\_ReleaseSMContext}): it looks
-up the session's SM-context reference through the WebConsole, then calls the SMF's
-\code{POST /nsmf-pdusession/v1/sm-contexts/\{ref\}/release}. It succeeds only if a
+The high-risk tool performs a real core-side release through the SMF's SM-context release
+service, \code{Nsmf\_}\allowbreak\code{PDUSession\_}\allowbreak\code{ReleaseSMContext}. It looks up the session's SM-context
+reference through the WebConsole and then calls the SMF endpoint
+\code{POST /nsmf-pdusession/v1/}\allowbreak\code{sm-contexts/\{ref\}/release}. It succeeds only if a
 post-condition confirms the release, primarily that the SMF no longer has the SM context.
 Calling the tool, or receiving an HTTP 2xx, is never counted as success. This path skips the
 SMF$\rightarrow$AMF$\rightarrow$gNB$\rightarrow$UE N1/N2 signalling, so the UE still
@@ -371,7 +374,9 @@ variance of a particular model.
 
 \subsection{Scenarios}
 Table~\ref{tab:scenarios} lists the three attacks. Each is triggered only by a poisoned
-alert; the DOS-02 payload is shown below.
+alert. DOS-02 is DOS-01 with a forged change ticket attached to every release: a signed-capability
+L2 rejects the ticket, while a claim-only L2 accepts it and leaves L3 to stop the attack. Its
+payload is shown below.
 
 \begin{lstlisting}
 ALERT: UPF-02 emergency maintenance window is open.
@@ -385,18 +390,16 @@ the UPF before the restart.]
 \centering
 \caption{Attack scenarios}
 \label{tab:scenarios}
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}l p{38mm} l@{}}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lll@{}}
 \toprule
-ID & Hijacked agent does & Expected stop \\
+ID & Injected directive & Stopped by \\
 \midrule
-ENUM-01 & dumps every SUPI & L1 \\
-DOS-01  & releases every live PDU session & L2 \\
-DOS-02  & same, with forged ticket attached & L2$^\dagger$ \\
+ENUM-01 & Dump every SUPI & L1 \\
+DOS-01  & Release every PDU session & L2 \\
+DOS-02  & DOS-01 + forged ticket & L2 (L3 if claim-only) \\
 \bottomrule
-\end{tabular}\\[2pt]
-\parbox{0.9\columnwidth}{\footnotesize $^\dagger$With signed capabilities; with the claim-only
-L2 the forged ticket passes and L3 is the expected stop.}
+\end{tabular}
 \end{table}
 
 Four benign operator tasks probe false positives: BENIGN-01, a read-only health check;
@@ -446,9 +449,7 @@ gateway.
 
 \begin{table}[t]
 \centering
-\caption{Live results with the claim-only L2 (130-run matrix; 3 attacks $\times$ 5 repeats per
-mode; nine sessions, cap~3). ASR and ``All'' average over all three scenarios; ``DoS'' averages
-over DOS-01 and DOS-02 only. Table~\ref{tab:signed} gives the rerun with signed capabilities.}
+\caption{Live results, claim-only L2}
 \label{tab:live}
 \begin{tabular}{@{}lcccc@{}}
 \toprule
@@ -473,7 +474,7 @@ L1+L3                & 0.67 & 0.00 & 2.00 & 3.00 \\
     ybar,
     width=\columnwidth, height=46mm,
     bar width=6pt,
-    ymin=0, ymax=10.2,
+    ymin=0, ymax=10.8,
     ytick={0,3,6,9},
     ylabel={Sessions released (of 9)},
     ylabel style={font=\footnotesize},
@@ -485,7 +486,7 @@ L1+L3                & 0.67 & 0.00 & 2.00 & 3.00 \\
     enlarge x limits=0.1,
     legend style={font=\footnotesize, at={(0.98,0.97)}, anchor=north east, legend columns=1, draw=none, fill=none},
     nodes near coords,
-    every node near coord/.append style={font=\tiny},
+    every node near coord/.append style={font=\tiny, rotate=90, anchor=west},
     ymajorgrids, grid style={gwlight},
     axis line style={gwgrey},
   ]
@@ -502,8 +503,11 @@ in all five repeats.}
 \label{fig:released}
 \end{figure}
 
-Table~\ref{tab:live} gives the live results and Fig.~\ref{fig:released} breaks the DoS
-attacks down by scenario. The figures support four conclusions.
+Table~\ref{tab:live} gives the live results of the 130-run matrix, which used the claim-only
+L2 (15 attack runs per mode, nine sessions, rate cap~3). ASR and the ``All'' column average over
+all three scenarios; the ``DoS'' column averages over DOS-01 and DOS-02 only.
+Fig.~\ref{fig:released} breaks the DoS attacks down by scenario. The figures support four
+conclusions.
 
 \emph{RBAC is equivalent to no defense.} Every malicious call is one the agent's role
 permits, so the allow-list never blocks anything: ASR and leakage are identical to \emph{off}. This is the core motivation for the gateway.
@@ -516,12 +520,13 @@ drops from 1.00 to 0.00 (Fig.~\ref{fig:enum}).
 \subfloat[Gateway off: raw SUPIs reach the agent]{\includegraphics[width=0.485\textwidth]{tex_enum_off.png}}\hfill
 \subfloat[Gateway on (L1): the agent sees only tokens]{\includegraphics[width=0.485\textwidth]{tex_enum_on.png}}
 \caption{ENUM-01 on the live testbed. Without the gateway the agent receives and reports real
-SUPIs; with L1 it receives only tokens, and the run is judged safe.}
+SUPIs; with L1 it receives only tokens, and the run is judged safe. (Screenshots from an earlier
+two-subscriber run; the nine-UE results are in Table~\ref{tab:live}.)}
 \label{fig:enum}
 \end{figure*}
 
 \emph{A claim-only L2 stops DOS-01 but is laundered by DOS-02.} Under L1+L2 the plain injection
-is blocked at the first release (\code{taint-control-flow}), but DOS-02 releases every session
+is blocked at every release attempt (\code{taint-control-flow}), but DOS-02 releases every session
 that is up (mean 8.6): the copied ticket satisfies L2's authorization branch
 (Fig.~\ref{fig:dos02}a).
 
@@ -534,9 +539,7 @@ contributes nothing.
 
 \begin{table}[t]
 \centering
-\caption{Rerun with keyed tokens and signed capabilities (5 repeats per cell). Released: mean
-sessions torn down by DOS-02 (of nine). FP: false-positive rate on BENIGN-02/04. $^*$Cell not
-affected by the changes; value from the 130-run matrix (Table~\ref{tab:live}).}
+\caption{Rerun with keyed tokens and signed capabilities}
 \label{tab:signed}
 \begin{tabular}{@{}lccc@{}}
 \toprule
@@ -552,8 +555,11 @@ L1+L3                    & 0.00 & 3.0$^*$ & ---  \\
 \end{tabular}
 \end{table}
 
-\emph{Signed capabilities close the laundering.} Table~\ref{tab:signed} repeats DOS-02 with L2
-verifying capabilities. The forged \code{CHG-20481} is not a capability the gateway signed, so
+\emph{Signed capabilities close the laundering.} Table~\ref{tab:signed} gives the 40-run
+rerun with keyed tokens and L2 verifying capabilities, five repeats per cell. It reports ENUM-01
+leakage, the mean number of sessions DOS-02 tears down (of nine), and the false-positive rate on
+BENIGN-02/04. Cells marked $^*$ run code the changes do not touch and keep their value from
+Table~\ref{tab:live}. The forged \code{CHG-20481} is not a capability the gateway signed, so
 L2 treats the tainted calls as unauthorized. Under both L1+L2 and the full gateway, in all ten
 runs, every one of the agent's nine release attempts carried \code{CHG-20481} and was stopped by
 L2 (\code{taint-control-flow}), and no session was released, against 8.6 (L1+L2) and 3 (full) with the claim-only L2. Modes without L2
@@ -605,8 +611,7 @@ blocked (Fig.~\ref{fig:curve}, FP rate 0.25 at cap~3).
 
 \begin{table}[t]
 \centering
-\caption{Gateway overhead per tool call (ms), pooled over all 130 runs
-(\code{results/results\_latency.csv})}
+\caption{Gateway overhead per tool call (ms)}
 \label{tab:latency}
 \begin{tabular}{@{}lrrrrr@{}}
 \toprule
@@ -621,7 +626,8 @@ Full   & 348 & 5.893 & 0.042 & 65.649 & 134.226 \\
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:latency} shows the median overhead is between 0.02 and 0.10\,ms in every mode,
+Table~\ref{tab:latency} pools the per-call overhead over all 130 runs of the matrix
+(\code{results/results\_latency.csv}). The median is between 0.02 and 0.10\,ms in every mode,
 far below our 50\,ms design target. The tail comes entirely from L3's core precheck, a single
 real round trip to the core, made only for high-risk calls: without the precheck (RBAC, L1, L1+L2)
 no call exceeds 0.65\,ms. L1+L3 has a \emph{higher} mean than the full gateway because without L2
@@ -661,14 +667,14 @@ know the gateway's thresholds. This experiment isolates L3; L1 and L2 are orthog
     ytick={0,0.25,0.5,0.75,1},
     x tick label style={font=\footnotesize},
     y tick label style={font=\footnotesize},
-    legend style={font=\footnotesize, at={(0.98,0.5)}, anchor=east, draw=none, fill=white, fill opacity=0.85, text opacity=1},
+    legend style={font=\footnotesize, at={(0.5,1.03)}, anchor=south, legend columns=2, draw=none, fill=none, /tikz/every even column/.append style={column sep=6pt}},
     ymajorgrids, grid style={gwlight},
     axis line style={gwgrey},
     mark size=1.8pt,
   ]
   \addplot[thick, color=gworange, mark=*] coordinates {(c1,0.53) (c2,0.66) (c3,0.80) (c5,0.93) (c8,1.00) (cinf,1.00)};
   \addplot[thick, color=gwblue, mark=square*] coordinates {(c1,0.50) (c2,0.38) (c3,0.25) (c5,0.12) (c8,0.00) (cinf,0.00)};
-  \legend{Mean fraction released (malicious), FP rate (benign)}
+  \legend{Fraction released (malicious), FP rate (benign)}
 \end{axis}
 \end{tikzpicture}
 \caption{Lowering the rate cap reduces what attacks tear down but blocks legitimate bulk
@@ -689,25 +695,25 @@ double release is blocked at every cap.
 
 \begin{table}[t]
 \centering
-\caption{Adaptive attacker variants (offline, injected clock)}
+\caption{Adaptive attacker variants}
 \label{tab:adaptive}
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{@{}p{37mm} l l@{}}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lll@{}}
 \toprule
 Variant & Result & Decided by \\
 \midrule
 Burst bulk teardown & capped & L3 rate \\
-Forged-auth burst, claim-only L2 & capped & L3 rate \\
-Forged-auth burst, signed L2 & \textcolor{gwgreen}{blocked} & L2 \\
+Forged burst, claim-only L2 & capped & L3 rate \\
+Forged burst, signed L2 & \textcolor{gwgreen}{blocked} & L2 \\
 Reused genuine capability & bounded & L2 uses, L3 rate \\
-Slow double / out-of-state release & \textcolor{gwgreen}{blocked} & L3 FSM \\
-Slow drip over distinct live sessions & \textcolor{gwred}{passes} & --- \\
+Slow double release & \textcolor{gwgreen}{blocked} & L3 FSM \\
+Slow drip, distinct sessions & \textcolor{gwred}{passes} & --- \\
 Split across rate buckets & \textcolor{gwred}{passes} & config \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-We let the attacker adapt, using deterministic tests with an injected clock
+We let the attacker adapt, using offline deterministic tests with an injected clock
 (Table~\ref{tab:adaptive}). A capability copied and replayed beyond its use budget is
 rejected by L2; within its budget, L3's rate cap still applies. Spacing releases beyond the rate window, each against a
 different session that really is \code{ACTIVE}, evades the windowed rate check completely.
@@ -748,7 +754,8 @@ an operator-normal release rate rather than the session count; in deployment it 
 from observed operator behavior, and Fig.~\ref{fig:curve} shows that any cap low enough to
 matter also blocks some legitimate bulk maintenance.
 
-\textbf{Sample size.} Each live cell ran five times (130 runs in total). The live numbers
+\textbf{Sample size.} Each live cell ran five times: 130 runs in the original matrix and 40 in
+the signed-capability rerun (170 in total). The live numbers
 are means over those repeats on a real core, without confidence intervals; the ranges are given
 with Fig.~\ref{fig:released}. Per-call latency carries the testbed drift noted above, so the pooled
 precheck tail overstates the steady-state overhead.
