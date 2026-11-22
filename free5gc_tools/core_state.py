@@ -368,6 +368,39 @@ def amf_session_active(supi: str, psi: int) -> bool:
     return amf_pdu_session(supi, psi) is not None
 
 
+# ---------------------------------------------------------------------------
+# Strict post-release probes. Unlike the lookups above, these never treat an
+# error as "gone": an HTTP 401/403/5xx from the WebConsole means the state is
+# UNKNOWN, so a failed lookup can never be counted as a successful release.
+#   True  = positively confirmed gone (404, or present-but-without-this-session)
+#   False = still there
+#   None  = could not be determined
+# ---------------------------------------------------------------------------
+def smf_context_gone(sm_context_ref: str) -> Optional[bool]:
+    """Is the SMF's SM context for this ref gone? The SMF OAM answers 404 when
+    the context is unknown, and the WebConsole forwards that status unchanged."""
+    if not sm_context_ref:
+        return None
+    resp = wc_get(f"/api/ue-pdu-session-info/{sm_context_ref}")
+    if resp.status_code == 404:
+        return True
+    if resp.ok:
+        return False
+    return None
+
+
+def amf_session_gone(supi: str, psi: int) -> Optional[bool]:
+    """Has the AMF stopped registering PDU session <psi>? 404 (UE context gone)
+    or a 200 context without that session id counts; any other status is unknown."""
+    ctx = registered_ue_context(supi)
+    status = ctx.get("http_status")
+    if status == 404:
+        return True
+    if status != 200:
+        return None
+    return all(int(s.get("id", -1)) != int(psi) for s in ctx.get("pdu_sessions", []))
+
+
 def subscriber_profile(supi: str) -> Dict[str, Any]:
     """Real provisioned profile from the WebConsole subscriber DB (or {} / raises)."""
     ns = norm_supi(supi)

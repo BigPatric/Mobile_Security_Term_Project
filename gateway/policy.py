@@ -63,6 +63,24 @@ DEFAULT_POLICY: Dict[str, Any] = {
 }
 
 
+class SharedCoreState:
+    """Procedure (FSM) state and rate budgets that belong to the CORE, not to one
+    agent session.
+
+    Taint is per session: one poisoned alert should not taint other sessions.
+    But "at most N releases per window" and "this session is already RELEASED"
+    are facts about the core. If every agent session built its own gateway with
+    its own buckets, an attacker who triggers k sessions would get k budgets and
+    no session would know what another had released. A deployment therefore
+    passes ONE SharedCoreState to the gateway of every session that fronts the
+    same core. Without it, each gateway keeps private state (the per-run setup
+    used by the experiments, where every run starts from a fresh core anyway)."""
+
+    def __init__(self) -> None:
+        self.procedures: Dict[str, ProcedureStore] = {}
+        self.buckets: Dict[str, RateBucket] = {}
+
+
 def _parse_entry(entry: Any) -> Tuple[str, Dict[str, Any]]:
     if isinstance(entry, str):
         return entry, {}
@@ -78,6 +96,7 @@ class PolicyEngine:
                  tokenizer: Optional[IdentifierTokenizer] = None,
                  taint: Optional[TaintTracker] = None,
                  now_fn: Callable[[], float] = time.monotonic,
+                 shared: Optional[SharedCoreState] = None,
                  secret: Optional[bytes] = None):
         self.spec = copy.deepcopy(spec if spec is not None else DEFAULT_POLICY)
         self.enabled_layers = {"L0"} | {lid for name, lid in LAYER_NAMES.items()
@@ -89,9 +108,15 @@ class PolicyEngine:
         self.taint = taint or TaintTracker(untrusted_sources=self.spec.get("untrusted_sources"),
                                            authority=CapabilityAuthority(master))
         self.authority: CapabilityAuthority = self.taint.authority
-        self.procedures: Dict[str, ProcedureStore] = {
-            name: ProcedureStore(name, p) for name, p in (self.spec.get("procedures") or {}).items()}
-        self.buckets: Dict[str, RateBucket] = {}
+        # FSM state and rate buckets: private to this gateway, or shared with every
+        # other session's gateway in front of the same core (see SharedCoreState).
+        proc_pool = shared.procedures if shared is not None else {}
+        self.procedures: Dict[str, ProcedureStore] = {}
+        for name, p in (self.spec.get("procedures") or {}).items():
+            if name not in proc_pool:
+                proc_pool[name] = ProcedureStore(name, p)
+            self.procedures[name] = proc_pool[name]
+        self.buckets: Dict[str, RateBucket] = shared.buckets if shared is not None else {}
         # shared singletons so state (taint, tokens) is one per session
         self._identifier = IdentifierCheck(self.tokenizer,
                                            self.spec.get("identifier_params", ["supi_token", "supi", "imsi"]))
@@ -150,6 +175,10 @@ class PolicyEngine:
         if not placed:
             out.append(check)
         self.chains[tool] = out
+
+    @property
+    def identifier_params(self) -> List[str]:
+        return sorted(self._identifier.identifier_params)
 
     # ------------------------------------------------------------------ #
     def chain_for(self, tool: str) -> List[Check]:

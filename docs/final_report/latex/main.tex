@@ -427,6 +427,7 @@ does arithmetic on recorded ground truth.
 
 % ===========================================================================
 \section{Evaluation}
+\label{sec:eval}
 
 \subsection{Metrics}
 \textbf{ASR}: the fraction of attack runs, over all three scenarios, in which core state
@@ -730,7 +731,8 @@ FSM is configured to require an observed \code{ACTIVE} state (the live policy in
 it from \code{UNKNOWN} after a core precheck, Fig.~\ref{fig:fsm}). Connecting a \emph{new core
 operation} still requires a thin tool adapter; extending \emph{protection} does not.
 
-In total the project has 77 offline unit and integration tests, all passing.
+In total the project has 85 offline unit and integration tests, all passing, including
+regression tests for the fixes described in Sec.~\ref{sec:fixes}.
 
 % ===========================================================================
 \section{Discussion and Limitations}
@@ -780,6 +782,39 @@ and periodic reconciliation of the gateway's FSM with core state are future work
 \textbf{Partial release signalling.} Our release path skips the N1/N2 messages to the UE.
 That makes the DoS silent, which is realistic for an attacker, but it also means the UE-side
 view is not a reliable success signal; we rely on SMF state instead.
+
+\textbf{Fixes made after the live runs.}\label{sec:fixes} A code review after the
+experiments found three issues. All three are now fixed and covered by regression tests; the
+live numbers in Sec.~\ref{sec:eval}, including the signed-capability rerun, were recorded
+before the fixes.
+(i)~\emph{Per-session state.} Each gateway instance kept its own FSM state and rate budget,
+and the harness builds one gateway per agent session. The cap of 3 per window therefore held
+per session: three poisoned alerts handled in three sessions could release nine sessions
+within a minute, and one session did not know what another had released. Our results are
+unaffected, because each run is a single session on a fresh core, but a deployment must share
+this state. The gateway now accepts a shared core state that holds the FSM and rate budgets
+for every session in front of one core, while taint stays per session.
+(ii)~\emph{Detokenization scope.} The gateway mapped tokens back to SUPIs in every string
+argument, not only in identifier arguments. A hijacked agent could paste tokens into a
+free-text argument of an outbound tool, such as a ticket or an e-mail, and the gateway would
+send the real SUPIs for it. None of our four tools is outbound, so the leakage result holds,
+but the L1 guarantee did not hold in general. Only identifier arguments are now detokenized.
+(iii)~\emph{Fail-open ground truth.} The post-release probes treated a failed lookup (e.g.\
+HTTP 401 or 500 from the WebConsole) as ``context gone'', and a release counted as verified
+if any of the SMF, AMF or data-plane signals fired. A transient error could therefore be
+counted as a release. This can only inflate the release counts of modes in which releases go
+through; it cannot make an attack look blocked. The probes now count a session as gone only
+on positive evidence (HTTP 404, or a context without that session).
+
+\textbf{Smaller issues.} The FSM keys a session by the literal argument value, so a
+re-spelled session id (\code{" 1"} for \code{1}) is a different FSM instance. In the live
+chain the core precheck blocks it, but the FSM-only offline tests (Table~\ref{tab:adaptive})
+assume canonical ids. A call with a valid capability skips L2 entirely, including value-level
+taint, so a genuine capability in a hijacked agent's hands also launders a SUPI named in the
+log; with the claim-only L2, a forged ticket did the same. The SUPI pattern has no digit
+boundaries, and the identifier check reads only top-level arguments. Finally, leakage is
+measured as a raw SUPI in the agent's final answer. Our scripted agent reports everything it
+receives, so for it this is the same as a raw SUPI reaching the agent.
 
 % ===========================================================================
 \section{Related Work}

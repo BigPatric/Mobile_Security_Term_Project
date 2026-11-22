@@ -5,7 +5,7 @@ The gateway implements the agent's ``ToolClient`` interface, so it drops into
 the exact seam where ``LocalToolClient`` sat ([agent/tool_client.py]) without
 touching the agent. Every tool call the agent makes crosses this boundary:
 
-    agent --args(tokens)--> [detokenize] [policy chain for this tool] --> inner tool --> free5GC
+    agent --args(tokens)--> [detokenize identifier args] [policy chain] --> inner tool --> free5GC
     agent <--result(tokens)-- [tokenize]  [observe: taint, FSM, ...]  <-- inner tool <-- free5GC
 
 The policy chain is config-driven (gateway/policy.py): each tool declares an
@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from agent.tool_client import ToolClient
 from .checks import CallContext
-from .policy import DEFAULT_POLICY, PolicyEngine
+from .policy import DEFAULT_POLICY, PolicyEngine, SharedCoreState
 from .secret import resolve_master
 from .tokenizer import IdentifierTokenizer
 from .taint_tracker import TaintTracker
@@ -51,6 +51,8 @@ class GatewayToolClient(ToolClient):
     ``policy`` is a policy spec (see gateway/policy.py); default DEFAULT_POLICY.
     ``verifier`` (legacy) replaces the L3 checks on the PDU-release tool with a
     given ProcedureVerifier instance.
+    ``shared_state`` makes the FSM state and rate budgets core-wide: pass the same
+    SharedCoreState to the gateway of every agent session in front of one core.
     """
 
     def __init__(self, inner: ToolClient, tokenizer: Optional[IdentifierTokenizer] = None,
@@ -61,6 +63,7 @@ class GatewayToolClient(ToolClient):
                  verifier: Optional[ProcedureVerifier] = None,
                  policy: Optional[Dict[str, Any]] = None,
                  now_fn=time.monotonic,
+                 shared_state: Optional[SharedCoreState] = None,
                  secret: Optional[bytes] = None):
         self.inner = inner
         master = resolve_master(secret)
@@ -73,7 +76,8 @@ class GatewayToolClient(ToolClient):
             spec,
             layers={"tokenizer": enable_tokenizer, "taint": enable_taint,
                     "verifier": enable_verifier or verifier is not None},
-            tokenizer=self.tokenizer, taint=taint, now_fn=now_fn, secret=master)
+            tokenizer=self.tokenizer, taint=taint, now_fn=now_fn, shared=shared_state,
+            secret=master)
         if verifier is not None:
             for tool in verifier.HIGH_RISK_SINKS:
                 self.engine.replace_layer(tool, "L3", verifier)
@@ -115,7 +119,10 @@ class GatewayToolClient(ToolClient):
     def invoke(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         t0 = time.perf_counter()
         arguments = arguments or {}
-        real_args = self.tokenizer.detokenize(arguments) if self.enable_tokenizer else arguments
+        # Only identifier arguments are mapped back to real SUPIs; tokens anywhere
+        # else stay opaque, so no tool can be used to un-tokenize data for the agent.
+        real_args = (self.tokenizer.detokenize_fields(arguments, self.engine.identifier_params)
+                     if self.enable_tokenizer else arguments)
 
         ctx = CallContext(name, arguments, real_args, self._internal_invoke)
         block, trace = self.engine.screen(ctx)
@@ -148,10 +155,12 @@ class GatewayToolClient(ToolClient):
 
 
 def build_gateway_client(inner: ToolClient, policy: Optional[Dict[str, Any]] = None,
-                         layers: Optional[Dict[str, bool]] = None) -> GatewayToolClient:
+                         layers: Optional[Dict[str, bool]] = None,
+                         shared_state: Optional[SharedCoreState] = None) -> GatewayToolClient:
     """Wrap an inner ToolClient in the Secure MCP Gateway from a policy spec."""
     layers = layers or {}
     return GatewayToolClient(inner, policy=policy,
                              enable_tokenizer=layers.get("tokenizer", True),
                              enable_taint=layers.get("taint", True),
-                             enable_verifier=layers.get("verifier", True))
+                             enable_verifier=layers.get("verifier", True),
+                             shared_state=shared_state)
