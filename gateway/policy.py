@@ -12,7 +12,7 @@ Turns a declarative policy spec into an ordered chain of checks per tool:
         trigger_pdu_session_release:
           checks:                        # run in order; first block wins
             - identifier
-            - provenance: {allow_authorized: true}
+            - provenance: {allow_authorized: true}   # verify_authorization: true (default)
             - fsm:  {procedure: pdu_session, event: release}
             - rate: {bucket: pdu_release, max: 2, window_sec: 60}
             - core_precheck: {via: ..., args: {...}, expect: {...}}
@@ -33,7 +33,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .checks import (Check, CallContext, CorePrecheck, DenyCheck, FsmCheck, IdentifierCheck,
                      ProcedureStore, ProvenanceCheck, RateBucket, RateCheck)
+from .capability import CapabilityAuthority
 from .procedures import pdu_session_procedure
+from .secret import resolve_master
 from .taint_tracker import TaintTracker
 from .tokenizer import IdentifierTokenizer
 
@@ -94,14 +96,18 @@ class PolicyEngine:
                  tokenizer: Optional[IdentifierTokenizer] = None,
                  taint: Optional[TaintTracker] = None,
                  now_fn: Callable[[], float] = time.monotonic,
-                 shared: Optional[SharedCoreState] = None):
+                 shared: Optional[SharedCoreState] = None,
+                 secret: Optional[bytes] = None):
         self.spec = copy.deepcopy(spec if spec is not None else DEFAULT_POLICY)
         self.enabled_layers = {"L0"} | {lid for name, lid in LAYER_NAMES.items()
                                         if (layers or {}).get(name, True)}
-        self.tokenizer = tokenizer or IdentifierTokenizer()
+        master = resolve_master(secret)            # one gateway secret, per-purpose subkeys
+        self.tokenizer = tokenizer or IdentifierTokenizer(master)
         self._now = now_fn
 
-        self.taint = taint or TaintTracker(untrusted_sources=self.spec.get("untrusted_sources"))
+        self.taint = taint or TaintTracker(untrusted_sources=self.spec.get("untrusted_sources"),
+                                           authority=CapabilityAuthority(master))
+        self.authority: CapabilityAuthority = self.taint.authority
         # FSM state and rate buckets: private to this gateway, or shared with every
         # other session's gateway in front of the same core (see SharedCoreState).
         proc_pool = shared.procedures if shared is not None else {}
@@ -114,7 +120,7 @@ class PolicyEngine:
         # shared singletons so state (taint, tokens) is one per session
         self._identifier = IdentifierCheck(self.tokenizer,
                                            self.spec.get("identifier_params", ["supi_token", "supi", "imsi"]))
-        self._provenance: Dict[bool, ProvenanceCheck] = {}
+        self._provenance: Dict[Tuple[bool, bool], ProvenanceCheck] = {}
 
         self.chains: Dict[str, List[Check]] = {}
         for tool, tspec in (self.spec.get("tools") or {}).items():
@@ -134,9 +140,11 @@ class PolicyEngine:
             return self._identifier
         if kind == "provenance":
             allow = bool(opts.get("allow_authorized", True))
-            if allow not in self._provenance:
-                self._provenance[allow] = ProvenanceCheck(self.taint, allow_authorized=allow)
-            return self._provenance[allow]
+            verify = bool(opts.get("verify_authorization", True))
+            if (allow, verify) not in self._provenance:
+                self._provenance[(allow, verify)] = ProvenanceCheck(
+                    self.taint, allow_authorized=allow, verify_authorization=verify)
+            return self._provenance[(allow, verify)]
         if kind == "fsm":
             proc = opts.get("procedure")
             if proc not in self.procedures:

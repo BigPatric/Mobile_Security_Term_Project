@@ -269,6 +269,29 @@ def build_tool_client(cfg: dict, mode: str, layers: dict, inner=None):
     return gw, gw, gw.active_layers()
 
 
+def issue_operator_capability(scenario_meta: dict, gateway):
+    """Trusted operator path: if the scenario's operator task grants an
+    authorization (benchmark JSON `operator_capability`), the gateway mints a
+    signed capability for it. Attack scenarios never get one; their only
+    'authorization' is whatever text the injected log contains."""
+    grant = scenario_meta.get("operator_capability")
+    if not grant or gateway is None:
+        return None
+    return gateway.issue_capability(grant["tool"], max_uses=int(grant.get("max_uses", 1)),
+                                    ttl_sec=float(grant.get("ttl_sec", 300)))
+
+
+def l2_authorization_mode(gateway):
+    """'signed' | 'claim' | None — how L2 treated authorizations in this run, so
+    evidence from before and after the signed-capability change stays separable."""
+    if gateway is None:
+        return None
+    kinds = {c.describe() for c in gateway.engine.all_checks() if c.layer == "L2"}
+    if not kinds:
+        return None
+    return "claim" if "provenance(claim)" in kinds else "signed"
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -291,6 +314,11 @@ def main() -> None:
              "baseline, 'rbac' = generic allow-list baseline. Overrides config gateway.enabled.",
     )
     parser.add_argument(
+        "--evidence",
+        default=None,
+        help="Evidence JSONL to append to (default: config demo.evidence_log).",
+    )
+    parser.add_argument(
         "--layers",
         default=None,
         help="Ablation: comma list of layers to keep ON, e.g. 'L1,L2' or 'none'. "
@@ -311,7 +339,7 @@ def main() -> None:
     tools_mod._CFG = cfg
     cs.set_config(cfg)
 
-    evidence_file = cfg.get("demo", {}).get("evidence_log", "attack_evidence.jsonl")
+    evidence_file = args.evidence or cfg.get("demo", {}).get("evidence_log", "attack_evidence.jsonl")
 
     print(BANNER)
 
@@ -391,7 +419,11 @@ def main() -> None:
     from agent import ReActAgent
 
     max_turns = cfg.get("agent", {}).get("max_turns", 10)
-    agent = ReActAgent(tool_client=tool_client, scenario_id=args.scenario)
+    capability = issue_operator_capability(scenario_meta, gateway)
+    if capability:
+        print(f"  Operator capability (trusted path): {capability[:40]}…\n")
+    agent = ReActAgent(tool_client=tool_client, scenario_id=args.scenario,
+                       operator_capability=capability)
 
     # Reaching here means the core is live (the gate above exits otherwise).
     print(f"{Fore.WHITE + Style.BRIGHT}▶  Running agent…{Style.RESET_ALL}\n")
@@ -422,6 +454,10 @@ def main() -> None:
         "gateway_enabled": mode != "off",
         "gateway_layers": active_layers,
         "gateway_policy": gateway.engine.describe() if gateway is not None else {},
+        "l2_authorization": l2_authorization_mode(gateway),
+        "operator_capability_issued": bool(capability),
+        # set by tools/run_live_matrix.sh: true = ran on a core kept from a run that changed nothing
+        "core_reused": {"true": True, "false": False}.get(os.environ.get("MATRIX_CORE_REUSED", "")),
         "agent_mode": "deterministic",
         "directive_source": result.directive_source,
         "agent_hijacked": result.hijacked,
@@ -447,7 +483,9 @@ def main() -> None:
                 "is_dangerous": c.is_dangerous(),
                 "changed_core_state": c.changed_core_state(),
                 "blocked_by": ({"layer": c.result.get("layer"), "check": c.result.get("check"),
-                                "violation": c.result.get("violation")} if c.was_blocked() else None),
+                                "violation": c.result.get("violation"),
+                                "auth_rejected": c.result.get("auth_rejected") or None}
+                               if c.was_blocked() else None),
                 "timestamp": c.timestamp,
             }
             for c in result.tool_calls

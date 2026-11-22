@@ -41,7 +41,7 @@ def main() -> None:
 
     supis = [f"imsi-20893000000000{i}" for i in range(1, args.need + 1)]
     deadline = time.time() + args.timeout
-    while time.time() < deadline:
+    while True:                                  # always probe at least once (--timeout 0 = one check)
         active = 0
         for s in supis:
             try:
@@ -52,6 +52,8 @@ def main() -> None:
         print(f"[wait] {active}/{args.need} active PDU session(s)", flush=True)
         if active >= args.need:
             sys.exit(0)
+        if time.time() + args.interval > deadline:
+            break
         time.sleep(args.interval)
     print(f"[wait] TIMEOUT after {args.timeout:g}s", flush=True)
     sys.exit(1)

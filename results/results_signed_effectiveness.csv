@@ -1,0 +1,5 @@
+mode,attack_runs,ASR,leakage,avg_released
+L1,5,0.0,0.0,0.0
+L1+L2,10,0.0,0.0,0.0
+L1+L3,5,0.0,0.0,0.0
+L1+L2+L3,10,0.0,0.0,0.0

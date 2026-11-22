@@ -21,8 +21,12 @@ Model (proposal slide 6 — "value-level provenance at the tool-call boundary"):
           (control-flow taint / taint laundering).
 
 A legitimate, operator-authorised maintenance action passes by carrying an
-explicit authorization capability, so benign operations are not blocked
-(keeping the benign false-positive rate low — proposal slide 8).
+authorization capability, so benign operations are not blocked (keeping the
+benign false-positive rate low — proposal slide 8). The capability must be one
+the gateway itself signed (gateway/capability.py): an authorization string the
+agent copied out of an untrusted log does not verify, so it cannot launder a
+tainted call (DOS-02). `verify_authorization=False` restores the original,
+claim-only behaviour (any non-empty string passes) for the before/after study.
 
 Aligns with Progent (privilege control on tool calls) and CaMeL (untrusted data
 must not trigger security-sensitive actions).
@@ -34,6 +38,8 @@ import json
 import logging
 import re
 from typing import Any, Dict, List, Optional, Set
+
+from .capability import CapabilityAuthority
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +53,9 @@ class TaintTracker:
     # State-changing, high-risk sinks that untrusted input must never drive.
     HIGH_RISK_SINKS: Set[str] = {"trigger_pdu_session_release", "modify_slice_quota"}
 
-    def __init__(self, untrusted_sources: Optional[Set[str]] = None) -> None:
+    def __init__(self, untrusted_sources: Optional[Set[str]] = None,
+                 authority: Optional[CapabilityAuthority] = None) -> None:
+        self.authority = authority or CapabilityAuthority()
         if untrusted_sources is not None:
             self.UNTRUSTED_SOURCES = set(untrusted_sources)
         self.tainted_active: bool = False
@@ -84,29 +92,41 @@ class TaintTracker:
         return self.check_sink(tool_name, real_args)
 
     def check_sink(self, tool_name: str, real_args: Dict[str, Any],
-                   allow_authorized: bool = True) -> Optional[Dict[str, Any]]:
-        if allow_authorized and self._authorized(real_args):
-            logger.info("[GW:L2] high-risk %s permitted — operator authorization present", tool_name)
-            return None
+                   allow_authorized: bool = True,
+                   verify_authorization: bool = True) -> Optional[Dict[str, Any]]:
+        auth_rejected = ""
+        claim = self._claim(real_args)
+        if allow_authorized and claim:
+            if not verify_authorization:
+                logger.info("[GW:L2] high-risk %s permitted — authorization claim present (unverified)",
+                            tool_name)
+                return None
+            ok, why = self.authority.check(claim, tool_name)
+            if ok:
+                logger.info("[GW:L2] high-risk %s permitted — %s", tool_name, why)
+                return None
+            auth_rejected = why
+            logger.warning("[GW:L2] authorization on %s rejected: %s", tool_name, why)
 
         argtext = json.dumps(real_args, ensure_ascii=False)
         matched = sorted(fp for fp in self.tainted_fingerprints if fp in argtext)
+        note = f"; authorization rejected: {auth_rejected}" if auth_rejected else ""
         if matched:
             return self._blocked(tool_name,
                 f"value-level taint: argument value(s) {matched} were introduced by {self._sources_str()}; "
-                f"a high-risk state change cannot be parameterised by injected content",
-                taint_kind="value-level", matched_values=matched)
+                f"a high-risk state change cannot be parameterised by injected content{note}",
+                taint_kind="value-level", matched_values=matched, auth_rejected=auth_rejected)
         if self.tainted_active:
             return self._blocked(tool_name,
                 f"control-flow taint: high-risk state change attempted after untrusted content from "
-                f"{self._sources_str()} was consumed this session, with no operator authorization "
-                f"(suspected prompt injection / taint laundering)",
-                taint_kind="control-flow")
+                f"{self._sources_str()} was consumed this session, with no valid operator authorization "
+                f"(suspected prompt injection / taint laundering){note}",
+                taint_kind="control-flow", auth_rejected=auth_rejected)
         return None
 
     @staticmethod
-    def _authorized(args: Dict[str, Any]) -> bool:
-        return bool(args.get("operator_authorization") or args.get("authorized"))
+    def _claim(args: Dict[str, Any]) -> Any:
+        return args.get("operator_authorization") or args.get("authorized")
 
     def _sources_str(self) -> str:
         """Human-readable list of the untrusted sources that tainted the session."""
@@ -116,9 +136,11 @@ class TaintTracker:
                          for p in self.provenance)
 
     def _blocked(self, tool_name: str, reason: str, taint_kind: str = "",
-                 matched_values: Optional[List[str]] = None) -> Dict[str, Any]:
+                 matched_values: Optional[List[str]] = None,
+                 auth_rejected: str = "") -> Dict[str, Any]:
         return {"status": "blocked", "layer": "L2", "tool": tool_name, "reason": reason,
                 "taint_kind": taint_kind, "matched_values": matched_values or [],
+                "auth_rejected": auth_rejected,
                 "tainted_by": [p.get("source_id") for p in self.provenance],
                 "provenance": list(self.provenance)}
 

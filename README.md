@@ -59,7 +59,7 @@ run **live** against a real free5GC + UERANSIM testbed:
 |---|---|---|
 | **ENUM-01** | dumps every SUPI via `list_subscribers` | **L1** — agent only ever sees tokens |
 | **DOS-01** | releases every live PDU session | **L2** — untrusted content cannot drive a high-risk call |
-| **DOS-02** | same, but copies a **forged authorization** from the log onto each release | **L3** — L2 is fooled; the procedure/rate check is not |
+| **DOS-02** | same, but copies a **forged authorization** from the log onto each release | **L2** — the forged ticket is not a gateway-signed capability (with the original claim-only L2: **L3**'s rate cap) |
 
 An attack counts as successful only when an independent probe confirms the
 session is really gone from the SMF — no mocks, no "the tool was called" counting.
@@ -70,9 +70,11 @@ Live on free5GC + UERANSIM (nine UEs, each run checked against the SMF's real st
 
 - **RBAC is no better than no defense**: every malicious call is one the agent is allowed to make.
 - **L1** cuts identifier leakage from 100% to 0%.
-- **L2** blocks the plain injected DoS, but a forged authorization string gets past it
-  (*taint laundering*). **L3** still caps that attack at its rate budget (3 of 9 sessions).
-- **No false positives** on the benign tasks, with a median overhead of about 0.03 ms per call.
+- **L2** blocks the plain injected DoS. In the original 130-run matrix L2 accepted any authorization
+  string, so a forged one got past it (*taint laundering*) and **L3** capped that attack at its rate
+  budget (3 of 9 sessions). L2 now requires a capability the gateway signed itself, so the forged
+  ticket is rejected: in the live rerun DOS-02 releases 0 sessions under L1+L2 and the full gateway.
+- **No false positives** on the benign tasks, with a median overhead of about 0.04 ms per call.
 
 Full numbers are in the [final report](docs/final_report/final_report.pdf) and
 [RESULTS.md](docs/evaluation/RESULTS.md). Offline experiments show that new procedures
@@ -89,16 +91,16 @@ tool-call boundary**, not in the model. Each layer closes a different hole:
 - **L1** protects confidentiality (identifier opacity).
 - **L2** protects source integrity (provenance).
 - **L3** protects procedure integrity, and it is the one layer that still holds
-  when an authorization can be forged, stolen or misused by an insider.
+  when a genuine authorization is stolen or misused by an insider.
 
 The gateway beats RBAC, causes no false positives on the benign tasks and adds negligible latency.
 
 **Limits we keep in view:** L3's rate check *bounds* bulk abuse rather than
 eliminating it (out-of-order operations, such as a double release, are blocked
 completely), a rate cap low enough to matter also blocks legitimate bulk maintenance, and
-slow-drip attacks evade it. Authorization is still an in-band claim, and a signed, gateway-verifiable
-capability is future work. The agent is a scripted worst-case control rather than a
-real LLM. See the roadmap in [DESIGN.md](docs/architecture/DESIGN.md).
+slow-drip attacks evade it. Signed capabilities are only as trustworthy as the operator path that
+requests them, and are scoped to a tool and use budget, not to a subscriber. The agent is a scripted
+worst-case control rather than a real LLM; a small real-model study is future work. See the roadmap in [DESIGN.md](docs/architecture/DESIGN.md).
 
 ---
 

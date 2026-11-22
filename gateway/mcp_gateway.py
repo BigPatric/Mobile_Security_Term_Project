@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Set
 from agent.tool_client import ToolClient
 from .checks import CallContext
 from .policy import DEFAULT_POLICY, PolicyEngine, SharedCoreState
+from .secret import resolve_master
 from .tokenizer import IdentifierTokenizer
 from .taint_tracker import TaintTracker
 from .verifier import ProcedureVerifier
@@ -62,9 +63,11 @@ class GatewayToolClient(ToolClient):
                  verifier: Optional[ProcedureVerifier] = None,
                  policy: Optional[Dict[str, Any]] = None,
                  now_fn=time.monotonic,
-                 shared_state: Optional[SharedCoreState] = None):
+                 shared_state: Optional[SharedCoreState] = None,
+                 secret: Optional[bytes] = None):
         self.inner = inner
-        self.tokenizer = tokenizer or IdentifierTokenizer()
+        master = resolve_master(secret)
+        self.tokenizer = tokenizer or IdentifierTokenizer(master)
         self.enable_tokenizer = enable_tokenizer
         spec = dict(policy if policy is not None else DEFAULT_POLICY)
         if identifier_params is not None:
@@ -73,7 +76,8 @@ class GatewayToolClient(ToolClient):
             spec,
             layers={"tokenizer": enable_tokenizer, "taint": enable_taint,
                     "verifier": enable_verifier or verifier is not None},
-            tokenizer=self.tokenizer, taint=taint, now_fn=now_fn, shared=shared_state)
+            tokenizer=self.tokenizer, taint=taint, now_fn=now_fn, shared=shared_state,
+            secret=master)
         if verifier is not None:
             for tool in verifier.HIGH_RISK_SINKS:
                 self.engine.replace_layer(tool, "L3", verifier)
@@ -93,6 +97,13 @@ class GatewayToolClient(ToolClient):
 
     def list_schema(self) -> List[Dict[str, Any]]:
         return self.inner.list_schema()    # tool discovery is transparent
+
+    # -- trusted operator path ----------------------------------------------
+    def issue_capability(self, tool: str, max_uses: int = 1, ttl_sec: float = 300) -> str:
+        """Mint a signed authorization capability (L2). Only the trusted operator
+        side calls this, never the agent's tool path; the agent just carries the
+        opaque string it was handed."""
+        return self.engine.authority.issue(tool, max_uses=max_uses, ttl_sec=ttl_sec)
 
     # -- the boundary --------------------------------------------------------
     def _internal_invoke(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:

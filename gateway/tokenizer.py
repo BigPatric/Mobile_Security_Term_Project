@@ -21,13 +21,21 @@ place via structural isolation rather than fragile text filtering.
 Tokens are **stable** (the same SUPI always maps to the same token within a
 gateway instance) so the round-trip works across multiple tool calls, and
 **reversible only inside the gateway** via the private mapping table.
+
+Tokens are derived with a keyed MAC, HMAC-SHA256(k_tokenize, "imsi-<digits>"),
+where k_tokenize comes from the gateway's private secret (gateway/secret.py).
+An unkeyed hash would let anyone who sees a token hash every SUPI of a known
+PLMN offline and map the token back; without the key that is not possible.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+from .secret import derive_key, resolve_master
 
 # free5GC SUPI/IMSI formats:
 #   - "imsi-208930000000001"  (WebConsole ueId / AMF supi — the common case)
@@ -44,7 +52,10 @@ class IdentifierTokenizer:
 
     TOKEN_PREFIX = "token_sub_"
 
-    def __init__(self) -> None:
+    def __init__(self, secret: Optional[bytes] = None) -> None:
+        # Keyed derivation: `secret` is the gateway master secret (random per
+        # instance unless MCP_GATEWAY_SECRET is set). It is never exposed.
+        self._key = derive_key(resolve_master(secret), "tokenize")
         # Private mapping tables — live ONLY inside the gateway, never exposed
         # to the agent.
         self.supi_to_token: Dict[str, str] = {}
@@ -64,7 +75,7 @@ class IdentifierTokenizer:
         tok = self.supi_to_token.get(canon)
         if tok is not None:
             return tok
-        digest = hashlib.sha1(canon.encode()).hexdigest()
+        digest = hmac.new(self._key, canon.encode(), hashlib.sha256).hexdigest()
         n = 4
         tok = f"{self.TOKEN_PREFIX}{digest[:n]}"
         # Resolve the astronomically unlikely short-hash collision by lengthening.

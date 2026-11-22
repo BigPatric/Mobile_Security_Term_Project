@@ -74,6 +74,7 @@ python3 run_attack_demo.py --scenario DOS-02  --gateway on --layers L1,L2   # ab
 sudo ./tools/run_live_matrix.sh --fresh             # each cell restarts to a full N-session core
 sudo N_UES=9 REPEATS=5 ./tools/run_live_matrix.sh   # the report's setup (130 runs)
 python3 tools/aggregate.py --csv results/results attack_evidence.jsonl  # → RESULTS.md tables + results/*.csv
+# the committed 130-run log is results/attack_evidence_live.jsonl
 ```
 
 Per-cell core / gNB / UE logs go to `live_logs/`. If root's `python3` lacks the
