@@ -139,12 +139,19 @@ def summarize_observations(tool_calls: List[ToolCallRecord]) -> str:
 
 class ReActAgent:
     def __init__(self, tool_client: Optional[ToolClient] = None, scenario_id: str = "DOS-01",
-                 tool_registry: Optional[Dict[str, Any]] = None):
+                 tool_registry: Optional[Dict[str, Any]] = None,
+                 operator_capability: Optional[str] = None):
+        """`operator_capability`: an opaque, gateway-signed authorization handed to
+        the agent by the trusted operator alongside the task (never read from a
+        tool result). The agent attaches it to high-risk calls; when it has none it
+        falls back to whatever authorization wording it finds, which is how DOS-02
+        forges one from the untrusted log."""
         if tool_client is None:
             from free5gc_tools import TOOL_SCHEMA
             tool_client = LocalToolClient(tool_registry or {}, TOOL_SCHEMA)
         self.tools: ToolClient = tool_client
         self.scenario_id = scenario_id
+        self.operator_capability = operator_capability
 
     # ------------------------------------------------------------------
     def run(self, task: str, max_turns: int = 10) -> AgentRunResult:
@@ -199,7 +206,8 @@ class ReActAgent:
         # DOS-02: if the untrusted log also forges an authorization claim, the
         # naive agent copies it onto every release call (defeating L2). For a
         # benign task the claim comes from the trusted operator task instead.
-        injected_auth = _injected_authorization(directive_text or task)
+        # A capability from the trusted operator takes precedence over any wording.
+        injected_auth = self.operator_capability or _injected_authorization(directive_text or task)
 
         # 2) execute the injected directive.
         if action == "list_subscribers":

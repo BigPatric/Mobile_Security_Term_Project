@@ -82,14 +82,19 @@ gateway:
       trigger_pdu_session_release:
         checks:
           - identifier
-          - provenance: {allow_authorized: true}
+          # L2: a tainted session may release only with a gateway-SIGNED operator
+          # capability (minted on the trusted operator path; gateway/capability.py).
+          # verify_authorization: false = legacy claim-only check (any string passes),
+          # kept for the before/after comparison of DOS-02.
+          - provenance: {allow_authorized: true, verify_authorization: true}
           - fsm: {procedure: pdu_session, event: release}
           # Bulk-teardown cap. Set to a fixed operator-normal release ceiling
           # (what a legitimate NOC agent would ever do in a minute), NOT tied to
           # testbed size: that way a bulk DOS trips after `max` releases regardless
           # of N, so blocked-fraction = 1 - max/N improves as the network grows.
           # max=3 leaves headroom above a single legitimate release (FP stays 0).
-          # Not exempt for authorized callers: this is what catches DOS-02's forged authorization.
+          # Not exempt for authorized callers: a stolen/over-scoped capability, or a forged
+          # one under the legacy claim-only L2, is still capped here.
           - rate: {bucket: pdu_release, max: 3, window_sec: 60, exempt_authorized: false}
           # Ground truth: the gateway itself asks the core that this session
           # exists before forwarding (placed after rate so a bulk attack can't

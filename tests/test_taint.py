@@ -55,12 +55,23 @@ def test_release_allowed_without_taint():
     assert seen["release"] and seen["release"][0]["supi_token"] == "imsi-208930000000001"
 
 
-def test_release_allowed_with_operator_authorization():
+def test_release_allowed_with_operator_capability():
     gw, tok, seen = _build(enable_taint=True)
+    cap = gw.issue_capability("trigger_pdu_session_release")        # trusted operator path
     gw.invoke("get_alert_logs", {"log_id": "alert-dos-001"})          # tainted...
     out = gw.invoke("trigger_pdu_session_release",
-                    {"supi_token": tok, "pdu_session_id": 1, "operator_authorization": "signed-by-noc"})
+                    {"supi_token": tok, "pdu_session_id": 1, "operator_authorization": cap})
     assert out["status"] == "ok", out                                # ...but authorized -> allowed
+
+
+def test_forged_authorization_string_blocked():
+    gw, tok, seen = _build(enable_taint=True)
+    gw.invoke("get_alert_logs", {"log_id": "alert-dos-001"})
+    out = gw.invoke("trigger_pdu_session_release",
+                    {"supi_token": tok, "pdu_session_id": 1, "operator_authorization": "CHG-20481"})
+    assert out["status"] == "blocked" and out["layer"] == "L2", out  # unsigned claim -> no laundering
+    assert "unsigned claim" in out["auth_rejected"], out
+    assert seen["release"] == []
 
 
 def test_enumeration_not_blocked_by_taint():

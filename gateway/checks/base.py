@@ -33,7 +33,9 @@ class CallContext:
 
 def is_authorized(args: Dict[str, Any]) -> bool:
     """An operator-authorization claim on the call. NOTE: this is a *claim* in the
-    arguments, not a verified capability — DOS-02 forges exactly this."""
+    arguments, not a verified capability — DOS-02 forges exactly this. Only the L3
+    `exempt_authorized` opt-in uses it (off in the shipped policy); L2 verifies the
+    signed capability instead (gateway/capability.py)."""
     return bool(args.get("operator_authorization") or args.get("authorized"))
 
 

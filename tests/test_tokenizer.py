@@ -62,6 +62,20 @@ def test_bare_15_digit_supi_tokenized():
     assert "208930000000009" not in out and "token_sub_" in out
 
 
+def test_token_not_computable_without_gateway_secret():
+    """Tokens are HMAC-keyed: knowing the SUPI space (one PLMN) is not enough to
+    map a token back offline. An unkeyed hash of the SUPI does not reproduce it,
+    and a tokenizer with a different secret produces a different token."""
+    import hashlib
+    supi = "imsi-208930000000001"
+    tok = IdentifierTokenizer(b"s" * 32).tokenize_text(supi)
+    suffix = tok[len("token_sub_"):]
+    for h in (hashlib.sha1, hashlib.sha256, hashlib.md5):
+        assert not h(supi.encode()).hexdigest().startswith(suffix), h
+    assert IdentifierTokenizer(b"t" * 32).tokenize_text(supi) != tok
+    assert IdentifierTokenizer(b"s" * 32).tokenize_text(supi) == tok   # same secret -> same token
+
+
 def test_unknown_token_left_untouched():
     tk = IdentifierTokenizer()
     assert tk.detokenize_text("token_sub_ffffff") == "token_sub_ffffff"

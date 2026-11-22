@@ -5,6 +5,20 @@
 
 建議順序：A → B → C，D/E 視時間而定。
 
+## 進度（2026-11-22）
+- A1 ✅ `results/attack_evidence_live.jsonl` 已加入；重新產生的 CSV 與原本完全相同。
+- A2 ✅ 採方案 1：Table III（現在編號為 IV）改用 pooled 數字；first pass（`head -26`）放內文。
+- A3 ⏭ 不做（示意圖，圖說已註明來自較早的 testbed）。
+- A4 ✅ 原因：有 1–2 個 UE 在攻擊開始時仍是 DEREGISTERED；369 個未被擋的 release 全數通過
+  post-condition。各格範圍寫在 Fig. 3 圖說。
+- A5 ✅ 用詞修正完成，並補引 AgentDojo、InjecAgent。
+- B ✅ 完成；ENUM-01 重跑 leakage 0.00（所有含 L1 的模式）。
+- C ✅ 完成；DOS-02 在 L1+L2 與 full 下 0 sessions，BENIGN-02/04 FP 0.00。報告 `\tbd` 已全部填入。
+- 重跑指令：`sudo REPEATS=5 PRESET=signed ./tools/run_live_matrix.sh`（只跑受影響的 8 格 × 5 = 40 次；
+  沒有改變 core 狀態的 run 之後沿用同一個 core）。
+- D ⏭ 不做。
+- E ✅ 寫進 Sec. VI future work。
+
 ---
 
 ## A. 低成本、論述修正（必做）
