@@ -73,14 +73,16 @@ and taint tracking, so untrusted content cannot drive a high-risk state change u
 carries a capability the gateway itself signed; and (L3) a
 procedure-aware verifier that checks every call against the TS~23.502 PDU-session state
 machine and a rate budget, regardless of any authorization the call claims to carry. We
-evaluate on a live free5GC + UERANSIM testbed with three injection attacks, and count an
+evaluate on a live free5GC + UERANSIM testbed with three injection attacks, using a scripted
+agent that always obeys the injected directive in place of a real LLM, and count an
 attack as successful only when the SMF confirms that the session is really gone. RBAC yields
 the same attack success rate and leakage as having no defense at all. L1 reduces identifier leakage from 100\% to
 0\%. L2 blocks the plain injected DoS. When L2 accepted any authorization string, a forged change
 ticket bypassed it and only L3 held, capping the attack at its rate budget within a window (3 of 9
 sessions); with signed capabilities, L2 rejects the forged ticket and the attack releases no session.
 The full gateway produces no false positives on four benign tasks (each releasing at most one session)
-and has a median overhead of 0.04\,ms per call. Offline experiments add an ASR/false-positive trade-off curve, an
+and adds a median of 0.04\,ms to ordinary calls; a release it lets through costs a median of
+77\,ms more, spent querying the core. Offline experiments add an ASR/false-positive trade-off curve, an
 adaptive-attacker analysis that marks where the defense stops holding (slow drip), and
 evidence that new procedures and tools are protected by configuration alone.
 \end{abstract}
@@ -123,10 +125,9 @@ capability to do damage instead of relying on its judgment.
         protection for a new tool or procedure is added by editing data, not code.
   \item A live evaluation on free5GC~\cite{free5gc} and UERANSIM~\cite{ueransim} with
         ground-truth success criteria, an RBAC baseline and a full layer ablation. It
-        shows that each layer closes a distinct hole, that an L2 which accepts any authorization
-        claim is laundered by a forged change ticket, and that binding L2 to gateway-signed
-        capabilities closes that hole, while L3 still bounds the damage when an authorization is
-        genuine but misused.
+        shows that an L2 which accepts any authorization claim is laundered by a forged change
+        ticket and only L3's rate cap then bounds the damage, and that binding L2 to
+        gateway-signed capabilities closes that hole on its own.
   \item An honest map of where the defense stops holding: a rate-cap trade-off curve on
         labelled synthetic traces and an adaptive-attacker study (slow drip, bucket
         splitting).
@@ -441,7 +442,8 @@ only and the maximum possible ASR is 2/3.
 radius; we report it averaged over all three scenarios (ENUM-01 contributes 0) and over the two
 DoS scenarios only.
 \textbf{FP rate}: the fraction of benign runs with any blocked call.
-\textbf{Latency}: gateway overhead per tool call, excluding the core's own processing time.
+\textbf{Latency}: time the gateway adds to a tool call. It includes the gateway's own query
+to the core (L3's precheck) but not the core's processing of the forwarded call itself.
 Six modes are compared: no gateway (\emph{off}), \emph{RBAC}, L1, L1+L2, L1+L3 and the full
 gateway.
 
@@ -567,11 +569,16 @@ run the same code as before, so their earlier results stand (L1+L3 still stops a
 keyed tokens, ENUM-01 leakage stays 0.00 in every mode that includes L1. BENIGN-02 and BENIGN-04,
 which now carry a real single-use capability, still pass in all ten runs (FP 0.00), each releasing
 exactly one session. With this L2, L1+L2 alone already stops
-all three of our attacks. L3 is still needed for a case our live attacks do not include: an
-authorization that is genuine but misused, such as a broad capability held by an agent that is
-later hijacked or an insider's mistake. An offline test gives a hijacked agent a valid capability
-for nine releases; L2 accepts it, and L3's rate cap stops the teardown at three. L3 also remains
-the only check on procedure ordering (double release).
+all three of our attacks, so the live results no longer show a hole that only L3 closes.
+L3's rate cap still matters when a genuine capability is misused, but only in a narrow case. A
+capability already carries a use budget, so if the budget matches the task, the budget alone
+bounds the misuse. The cap adds protection only when the budget exceeds what is needed at once,
+for example a standing capability for a whole maintenance window held by an agent that is later
+hijacked: an offline test gives a hijacked agent a valid capability for nine releases, L2 accepts
+it, and the cap stops the teardown at three. If the budget is large because the operator really
+needs a bulk release, the cap blocks that legitimate release as well (Fig.~\ref{fig:curve}). The
+part of L3 that no other layer replaces is the FSM: it is the only check on procedure ordering,
+such as a double release.
 
 \begin{figure*}[t]
 \centering
@@ -596,7 +603,8 @@ not finished registering when the attack started: the agent's query showed them
 \code{DEREGISTERED} with no PDU session, because the harness proceeds after its readiness timeout
 even if fewer than nine sessions are up. In every unblocked run the agent released every session
 that existed at the start, and none of the 369 release calls that no check blocked failed its
-post-condition, so the ground truth itself is unaffected.
+post-condition, so the shortfall does not come from failed releases. (Sec.~\ref{sec:fixes}
+discusses a flaw in that post-condition.)
 
 \subsection{False positives}
 The full gateway and RBAC both pass all four benign tasks (FP rate 0.00 for each). This
@@ -627,13 +635,18 @@ Full   & 348 & 5.893 & 0.042 & 65.649 & 134.226 \\
 \end{table}
 
 Table~\ref{tab:latency} pools the per-call overhead over all 130 runs of the matrix
-(\code{results/results\_latency.csv}). The median is between 0.02 and 0.10\,ms in every mode,
-far below our 50\,ms design target. The tail comes entirely from L3's core precheck, a single
-real round trip to the core, made only for high-risk calls: without the precheck (RBAC, L1, L1+L2)
-no call exceeds 0.65\,ms. L1+L3 has a \emph{higher} mean than the full gateway because without L2
+(\code{results/results\_latency.csv}). Because most calls are cheap reads, the pooled
+median (0.02--0.10\,ms in every mode) describes ordinary calls, not the calls that matter most.
+The two kinds of call must be read separately. Every call that does not query the core stays
+below 0.65\,ms. A release that passes L3, by contrast, waits for L3's core precheck, a real
+round trip to the core: the 55 such releases in the matrix (25 under the full gateway, 30 under
+L1+L3) took 18--150\,ms, median 76\,ms (77\,ms under the full gateway alone), which exceeds our
+50\,ms design target. That cost is paid
+only by high-risk calls that are about to be forwarded; a release blocked earlier in the chain
+costs under 0.2\,ms. L1+L3 has a \emph{higher} mean than the full gateway because without L2
 the first releases of DOS-01 also reach the precheck (the rate cap stops the rest), whereas the
-full gateway blocks DOS-01 at L2 before any precheck. The precheck tail exceeds the 50\,ms target
-(p95 98\,ms for L1+L3 and 66\,ms for the full gateway) and grows over the course of the matrix: in
+full gateway blocks DOS-01 at L2 before any precheck. The precheck time also grows over the
+course of the matrix: in
 the first pass (the first 26 runs of the same log) the p95 was 22\,ms for L1+L3 and 21\,ms for the
 full gateway. We believe the drift comes from free5GC core state accumulating over repeated
 bring-ups and tear-downs rather than from the gateway, which makes one round trip per precheck
@@ -810,13 +823,20 @@ but the L1 guarantee did not hold in general. Only identifier arguments are now 
 (iii)~\emph{Fail-open ground truth.} The post-release probes treated a failed lookup (e.g.\
 HTTP 401 or 500 from the WebConsole) as ``context gone'', and a release counted as verified
 if any of the SMF, AMF or data-plane signals fired. A transient error could therefore be
-counted as a release. This can only inflate the release counts of modes in which releases go
-through; it cannot make an attack look blocked. The probes now count a session as gone only
-on positive evidence (HTTP 404, or a context without that session). The evidence logs do not
-record the probes' HTTP status, so we cannot rule out such a miscount, but the data give no sign
-of one: every one of the 379 recorded releases carries the SMF-context confirmation, every
-unblocked run released exactly as many sessions as existed when it started, and every capped run
-released exactly the cap of~3.
+counted as a release. The probes now count a session as gone only on positive evidence (HTTP
+404, or a context without that session). For the recorded runs, the logs settle one half of
+this flaw: all 379 recorded releases name the SMF-context signal as their confirmation, so the
+lenient fallback to the AMF or data-plane signals never decided a result. The other half they
+cannot settle. The logs do not record the probes' HTTP status, and the release counts cannot
+serve as a check, because a fail-open probe would have produced exactly the same counts. Only
+the SMF log shows a release directly; Fig.~\ref{fig:smflog} is one such log, and we did not
+check the log for every release. We therefore state what the flaw can and cannot affect. A
+blocked call never reaches the core, so every result that rests on blocking (the zero releases
+under L2, the calls stopped at the rate cap, the false-positive rates) does not depend on the
+probe. The counts for releases that went through, such as the 8.9 sessions per undefended DoS
+and the 3 per capped run, are upper bounds: a miscount could only make them too high. That would
+overstate the damage of an undefended attack, and with it how much the gateway reduces that
+damage.
 
 \textbf{Smaller issues.} The FSM keys a session by the literal argument value, so a
 re-spelled session id (\code{" 1"} for \code{1}) is a different FSM instance. In the live
@@ -855,17 +875,20 @@ state at the tool-call boundary of an LLM agent that operates a 5G core.
 \section{Conclusion}
 
 Prompt-injection defense for network-operations agents belongs at the tool-call boundary,
-not in the model. Our gateway's three layers each close a different hole: L1 protects
+not in the model. Our gateway's three layers each protect a different property: L1 protects
 identifier confidentiality, L2 protects source integrity, and L3 protects procedure
-integrity. On a live free5GC core, RBAC was no better than no defense, while the full gateway
-reduced identifier leakage to zero, blocked the injected DoS, caused no false positives on
-four benign tasks (each releasing at most one session), and added a median overhead of 0.04\,ms per call.
+integrity. On a live free5GC core, driven by a scripted, always-hijacked agent, RBAC was no
+better than no defense, while the full gateway reduced identifier leakage to zero, blocked the
+injected DoS and caused no false positives on four benign tasks (each releasing at most one
+session). It added a median of 0.04\,ms to ordinary calls and 77\,ms to each release it let
+through, the cost of checking that release against the core.
 A forged change ticket laundered an L2 that trusted authorization claims, and L3 bounded that
 attack at its rate budget (three of nine sessions); requiring a gateway-signed capability lets L2
-reject the forgery outright. L3 remains the layer that holds when an authorization is genuine but
-stolen or misused, because it never trusts the authorization in the first place. Its limits are equally
-clear: rate bounds bursts but not slow drip, a cap low enough to matter also blocks legitimate
-bulk maintenance, and only procedure ordering is a guarantee no attacker timing can evade.
+reject the forgery outright, after which L1 and L2 alone stop all three live attacks. L3's rate
+cap then adds protection only when a genuine capability's budget exceeds the task at hand, and a
+cap low enough to matter also blocks legitimate bulk maintenance; it bounds bursts but not slow
+drip. L3's FSM is the lasting contribution: procedure ordering is the one guarantee that no
+attacker timing can evade and that no other layer provides.
 
 \section*{Artifact}
 % Left-aligned: long monospace paths cannot hyphenate, so full justification
