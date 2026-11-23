@@ -376,12 +376,16 @@ def amf_session_active(supi: str, psi: int) -> bool:
 #   False = still there
 #   None  = could not be determined
 # ---------------------------------------------------------------------------
-def smf_context_gone(sm_context_ref: str) -> Optional[bool]:
+def smf_context_gone(sm_context_ref: str, statuses: Optional[List[int]] = None) -> Optional[bool]:
     """Is the SMF's SM context for this ref gone? The SMF OAM answers 404 when
-    the context is unknown, and the WebConsole forwards that status unchanged."""
+    the context is unknown, and the WebConsole forwards that status unchanged.
+    If `statuses` is given, the HTTP status of this lookup is appended to it
+    (evidence: proves a "gone" verdict came from a real 404)."""
     if not sm_context_ref:
         return None
     resp = wc_get(f"/api/ue-pdu-session-info/{sm_context_ref}")
+    if statuses is not None:
+        statuses.append(resp.status_code)
     if resp.status_code == 404:
         return True
     if resp.ok:
@@ -389,11 +393,14 @@ def smf_context_gone(sm_context_ref: str) -> Optional[bool]:
     return None
 
 
-def amf_session_gone(supi: str, psi: int) -> Optional[bool]:
+def amf_session_gone(supi: str, psi: int, statuses: Optional[List[int]] = None) -> Optional[bool]:
     """Has the AMF stopped registering PDU session <psi>? 404 (UE context gone)
-    or a 200 context without that session id counts; any other status is unknown."""
+    or a 200 context without that session id counts; any other status is unknown.
+    If `statuses` is given, the HTTP status of this lookup is appended to it."""
     ctx = registered_ue_context(supi)
     status = ctx.get("http_status")
+    if statuses is not None:
+        statuses.append(status)
     if status == 404:
         return True
     if status != 200:

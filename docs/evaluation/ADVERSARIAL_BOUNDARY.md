@@ -1,6 +1,6 @@
 # Adaptive Attackers — Where the Defense Stops Holding
 
-**Updated:** 2026-11-22
+**Updated:** 2026-11-23
 **Evidence:** `python3 tests/test_adversarial.py` (5 offline, deterministic, time-controlled tests),
 plus the capability tests in `tests/test_capability.py` and `tests/test_e2e_scenarios.py`; all pass.
 **Related:** [RESULTS.md](RESULTS.md) · [GENERALITY_PROOF.md](GENERALITY_PROOF.md) · [END_TO_END_FLOW.md](../architecture/END_TO_END_FLOW.md)
@@ -23,7 +23,7 @@ an injected fake clock, so "slow" attacks need no real waiting and results are d
 | Tampered / re-scoped / expired / other-gateway capability | ✅ **Blocked** | L2 signature, scope and expiry checks | `test_tampered_fields_rejected`, `test_wrong_tool_rejected`, `test_expired_rejected`, `test_capability_from_another_gateway_rejected` |
 | Reusing a genuine capability beyond its budget | ✅ **Blocked** after `max_uses` | L2 nonce use count | `test_gateway_copied_capability_bounded_by_max_uses` |
 | Genuine over-scoped capability held by a hijacked agent | ✅ **Blocked** (capped) | L3 rate (L2 accepts the valid capability) | `test_genuine_overscoped_capability_still_capped_by_l3` |
-| Double / out-of-state release (slow) | ✅ **Blocked** (time-independent) | L3 FSM ordering | `test_slow_drip_double_release_still_blocked_by_fsm` |
+| Double / out-of-state release (slow) | ✅ **Blocked** (time-independent) | L3 FSM ordering | `test_slow_drip_double_release_still_blocked_by_fsm` (live, without the gateway, the SMF answers a second release with HTTP 404, so this variant is harmless on free5GC: [RESULTS.md §5](RESULTS.md)) |
 | **Slow drip: distinct sessions, spread beyond the rate window** | ❌ **Not blocked (residual risk)** | invisible to a windowed rate | `test_slow_drip_across_distinct_sessions_evades_rate` |
 | **Spread across separate rate buckets** | ❌ **Not blocked (config-dependent)** | each bucket has its own budget | `test_separate_buckets_let_an_attacker_double_the_budget` |
 

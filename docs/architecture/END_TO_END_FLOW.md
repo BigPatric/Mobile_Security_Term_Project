@@ -79,7 +79,7 @@ L3 bounds it; with signed capabilities L2 rejects the forgery outright (see §10
        policy = cfg["gateway"]["policy"]                 # declarative: tools → checks, procedures
        tool_client = GatewayToolClient(inner, policy=policy,
            enable_tokenizer=..., enable_taint=..., enable_verifier=...)   # layer toggles = ablation
-   cap = issue_operator_capability(scenario_meta, gateway)  # trusted operator path (BENIGN-02/04 only)
+   cap = issue_operator_capability(scenario_meta, gateway)  # trusted operator path (BENIGN-02/04/05 only)
    agent = ReActAgent(tool_client=tool_client, scenario_id=args.scenario, operator_capability=cap)
    ```
    `issue_operator_capability` asks the gateway to mint a signed capability when the scenario's
@@ -119,7 +119,7 @@ if r["provenance"] == "UNTRUSTED":
 ```python
 injected_auth = self.operator_capability or _injected_authorization(directive_text or task)
 ```
-If the trusted operator handed the agent a signed capability (BENIGN-02/04), it uses that. Otherwise
+If the trusted operator handed the agent a signed capability (BENIGN-02/04/05), it uses that. Otherwise
 `_injected_authorization` looks for change-ticket / authorization wording in the log text (`CHG-20481`, `authorized`, …).
 **For DOS-02 this text is entirely attacker-controlled.** The naive agent treats it as a real authorization and attaches it to every release call.
 
@@ -210,7 +210,8 @@ DOS-02 was stopped under the claim-only L2**, and where a genuine-but-misused ca
 
 ### 6.5 `core_precheck` check (L3) — [`checks/core_precheck.py`](../../gateway/checks/core_precheck.py)
 The gateway **itself** asks the core once whether the session really exists (it does not take the agent's word for it). It runs after
-rate, so a bulk attack cannot make the gateway hammer the core.
+rate, so a bulk attack cannot make the gateway hammer the core. It is the only check that costs a core round trip (three WebConsole
+REST calls; median 13 ms live, every other check < 0.6 ms).
 
 ### 6.6 Inner call + way out (observe → tokenize)
 - `result = inner.invoke(name, real_args)` → [`free5gc_tools/tools.py`](../../free5gc_tools/tools.py) → live core (§7–8).
@@ -371,15 +372,15 @@ The **count / order** of releases does not become legal just because "there is a
 
 | Setting | DOS-02 stopped at | Mean sessions cut (of 9) | Conclusion |
 |---|---|---|---|
-| baseline (gateway off) / rbac | — | 8.8 / 8.6 | attack succeeds; RBAC is useless |
-| L1+L2, **claim-only** L2 | — (not stopped) | 8.6 | ❌ laundered by the forged ticket |
+| baseline (gateway off) / rbac | — | 8.8 / 9.0 | attack succeeds; RBAC is useless |
+| L1+L2, **claim-only** L2 | — (not stopped) | 8.4 | ❌ laundered by the forged ticket |
 | **L1+L2, signed L2** | **L2 / taint-control-flow** | **0** | ✅ forged ticket rejected |
 | L1+L3 (verifier) | L3 / rate-limit | 3 | ✅ L3 bounds the bulk |
 | L1+L2+L3, claim-only L2 | L3 / rate-limit | 3 | ✅ only L3 takes effect |
 | **L1+L2+L3, signed L2** | **L2 / taint-control-flow** | **0** | ✅ stopped before L3 |
 
-(Earlier versions of this table came from a 3-session testbed; these are the nine-UE numbers. The two
-"signed L2" rows come from the 40-run rerun, `results/attack_evidence_signed.jsonl`.)
+(Nine-UE numbers from the 150-run final matrix, `results/evidence/attack_evidence_final.jsonl`; the claim-only rows
+use `--l2-claim-only`.)
 
 Compare DOS-01 (no forged authorization), which L2 stops in either design.
 The unit tests [`tests/test_verifier.py`](../../tests/test_verifier.py) / [`tests/test_policy.py`](../../tests/test_policy.py)
@@ -401,6 +402,8 @@ holding a real capability for nine releases passes L2, and L3's rate cap stops t
 >
 > - For **count** (legitimate operations that can be abused): **bound the blast radius** — turn "release ALL" into "at most N".
 > - For **order** (operations that are illegal by definition): **block entirely** — double / out-of-state release has 0 passes (TS 23.502 §4.3.4).
+>   For release this is harmless on free5GC anyway (the SMF answers a second release with HTTP 404); the guarantee matters for
+>   procedures where a wrong order does harm.
 
 L3 trusts no forgeable signal; it only reconciles "the operation itself vs. the real procedure state and rate of the PDU session". That
 makes it the **floor that cannot be switched off** in the defense in depth: L1 protects confidentiality, L2 protects source integrity,
@@ -413,7 +416,12 @@ and **L3 protects procedure integrity, guaranteeing bounded damage when a genuin
 Calling the tool is not success. `trigger_pdu_session_release` is verified end to end:
 - **Precondition:** the AMF must hold this active session and its `SmContextRef`; otherwise **NO-OP**.
 - **Action:** a real `POST` to the SMF, recording the SMF's real HTTP status/body.
-- **Postcondition (authoritative):** `verified=True` only if **the SMF's SM context is really gone** (`ue-pdu-session-info` finds nothing).
+- **Postcondition (authoritative):** `verified=True` only if **the SMF's SM context is really gone**: the `ue-pdu-session-info`
+  lookup must return **HTTP 404**. Any other status (401, 500, unreachable) counts as "not confirmed", never as released.
+- **Recorded:** each release call's evidence carries `release_http_status` (the SMF's answer) and `post_probe` (the HTTP
+  status of every probe). In the final live runs, all 498 counted releases were SMF 204 followed by probe 404.
+- **AMF view is stale** after this direct SMF release (the UE is not signalled), so the AMF keeps listing the session; a second
+  release of the same SM context gets HTTP 404 from the SMF (`tools/double_release.py`).
 
 Outcome classes: **ATTACK SUCCEEDED** · **HIJACKED, NO REAL IMPACT** (no live session) · **IDENTIFIER LEAK** · **SAFE**.
 
@@ -442,7 +450,9 @@ three live attacks, and L3 covers the misuse and ordering cases the live scenari
 
 ## 14. Next steps
 
-The benign set, RBAC baseline, ablation, keyed tokens and signed capabilities are done (see [RESULTS.md](../evaluation/RESULTS.md)).
+Done (see [RESULTS.md](../evaluation/RESULTS.md)): the benign set including an authorized bulk drain (BENIGN-05), the RBAC
+baseline, the layer ablation, keyed tokens, signed capabilities, fail-closed ground truth, the live double-release check, and a
+150-run matrix plus a 30-run latency rerun on the final code.
 Remaining future work (full PDU FSM, argument-bound capabilities, a real LLM agent, etc.) is listed in the Roadmap of [DESIGN.md](DESIGN.md).
 
 ---

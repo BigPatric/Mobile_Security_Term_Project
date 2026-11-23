@@ -15,9 +15,12 @@ Mobile_Security_Term_Project/
 │   ├── architecture/   # DESIGN, END_TO_END_FLOW, REPOSITORY_LAYOUT (this file)
 │   ├── guides/         # RUNNING
 │   ├── evaluation/     # RESULTS, EVAL_CURVE, ADVERSARIAL_BOUNDARY, GENERALITY_PROOF
-│   ├── final_report/   # final_report.pdf + LaTeX source (latex/)
+│   ├── final_report/   # LaTeX source (latex/); final_report.pdf once compiled
 │   └── proposal/       # proposal and progress report PDFs
-├── results/            # aggregated live results (CSV) from tools/aggregate.py
+├── results/            # live results behind the report (see results/README.md)
+│   ├── evidence/       #   raw JSONL, one record per run (final code)
+│   ├── tables/         #   CSVs from tools/aggregate.py
+│   └── archive/        #   superseded evidence from earlier code versions
 ├── free5gc/            # vendored 5G core (external, called not modified)
 ├── UERANSIM/           # vendored RAN/UE simulator (external, called not modified)
 ├── run_attack_demo.py  # one live run: --scenario, --gateway on/off/rbac, --layers
@@ -25,8 +28,8 @@ Mobile_Security_Term_Project/
 ├── requirements.txt
 ├── LICENSE             # MIT (own code; vendored dirs keep their licenses)
 ├── cleanup.py          # removes __pycache__ directories
-├── attack_evidence.jsonl  # (git-ignored) append-only evidence, one JSON per run
-└── live_logs/          # (git-ignored) per-cell core / gNB / UE logs from the live matrix
+├── attack_evidence.jsonl  # (git-ignored) default evidence file for ad-hoc demo runs
+└── live_logs/          # (git-ignored) per-cell core / gNB / UE / WebConsole logs from the live matrix
 ```
 
 ---
@@ -42,10 +45,12 @@ Mobile_Security_Term_Project/
 
 | File | Layer | Role |
 |---|---|---|
-| [mcp_gateway.py](../../gateway/mcp_gateway.py) | — | `GatewayToolClient`: the enforcing `ToolClient` at the tool-call boundary. Runs detokenize → policy chain → core → observe → tokenize. Block responses are redacted (no raw SUPI). Records every decision (check trace, gateway overhead) for the evidence log. |
+| [mcp_gateway.py](../../gateway/mcp_gateway.py) | — | `GatewayToolClient`: the enforcing `ToolClient` at the tool-call boundary. Runs detokenize → policy chain → core → observe → tokenize. Block responses are redacted (no raw SUPI). Records every decision (check trace, gateway overhead) for the evidence log. Accepts a `SharedCoreState` so FSM state and rate budgets are shared by every agent session in front of one core. |
+| [secret.py](../../gateway/secret.py) | — | The gateway's master secret (env `MCP_GATEWAY_SECRET`, else random per process) and the two keys derived from it: tokenization (L1) and capability signing (L2). |
 | [policy.py](../../gateway/policy.py) | — | **Config-driven policy pipeline.** `PolicyEngine` builds an ordered check chain per tool from `config.yaml` (`gateway.policy`). The first check that blocks stops the call. Bad policies are rejected at build time. |
-| [tokenizer.py](../../gateway/tokenizer.py) | **L1** | Identifier opacity. Rewrites every real SUPI in a tool *result* to a stable opaque token (`token_sub_a8f9`) before the agent sees it, and restores it on the *argument* path. |
-| [taint_tracker.py](../../gateway/taint_tracker.py) | **L2** | Provenance / taint. Marks the session TAINTED when an untrusted source (`get_alert_logs`) returns, and blocks a high-risk state change driven by that content without operator authorization. Tracks taint at value level and at control-flow level. |
+| [tokenizer.py](../../gateway/tokenizer.py) | **L1** | Identifier opacity. Rewrites every real SUPI in a tool *result* to an opaque token (`token_sub_a8f9`, keyed HMAC) before the agent sees it, and restores it only in identifier arguments. |
+| [taint_tracker.py](../../gateway/taint_tracker.py) | **L2** | Provenance / taint. Marks the session TAINTED when an untrusted source (`get_alert_logs`) returns, and blocks a high-risk state change driven by that content unless the call carries a capability the gateway signed (`verify_authorization: false` restores the legacy claim-only check). Tracks taint at value level and at control-flow level. |
+| [capability.py](../../gateway/capability.py) | **L2** | Signed operator capabilities `gwcap1.<tool>.<max_uses>.<expiry>.<nonce>.<hmac>`, minted only on the trusted operator path; each accepted call spends one use. |
 | [verifier.py](../../gateway/verifier.py) | **L3** | Procedure-aware FSM (TS 23.502 PDU-session state machine) + sliding-window rate limit. Binds **every** caller, authorized or not (`exempt_authorized=False`). |
 | [procedures.py](../../gateway/procedures.py) | L3 | 3GPP procedure specs as data (PDU-session life-cycle). |
 | [checks/](../../gateway/checks/) | L0–L3 | Pluggable checks. None of them filters by tool name; the policy decides which check guards which tool. |
@@ -79,7 +84,7 @@ and the expected hijacked behavior.
 | [attacks/enumerate_subscribers.json](../../benchmark/attacks/enumerate_subscribers.json) | ENUM-01: SUPI enumeration |
 | [attacks/release_all_sessions.json](../../benchmark/attacks/release_all_sessions.json) | DOS-01: mass PDU-session release |
 | [attacks/authorized_bulk_release.json](../../benchmark/attacks/authorized_bulk_release.json) | DOS-02: mass release with forged authorization |
-| [benign/](../../benchmark/benign/) | BENIGN-01…04: read-only health checks, an authorized single release, and the same tasks in a tainted session. Used for the false-positive rate. |
+| [benign/](../../benchmark/benign/) | BENIGN-01…05: read-only health checks, an authorized single release, the same tasks in a tainted session, and an authorized bulk drain of every session (BENIGN-05, the rate-cap false-positive case). |
 | [generator.py](../../benchmark/generator.py) | Synthetic workload generator: intent-labelled benign / malicious traces (incl. legitimate bulk maintenance) for the ASR/FP curve in [EVAL_CURVE.md](../evaluation/EVAL_CURVE.md). Knows nothing about gateway thresholds. |
 
 ## `tests/` — offline tests (no live core)
@@ -94,17 +99,21 @@ and the expected hijacked behavior.
 | [test_adversarial.py](../../tests/test_adversarial.py) | Adaptive attackers with a fake clock (see [ADVERSARIAL_BOUNDARY.md](../evaluation/ADVERSARIAL_BOUNDARY.md)) |
 | [test_generator.py](../../tests/test_generator.py) | Self-checks for the synthetic workload generator |
 | [test_e2e_scenarios.py](../../tests/test_e2e_scenarios.py) | Real agent + real `config.yaml` policy against a fake core, every scenario × mode. Run directly to print the expected-results matrix. |
+| [test_capability.py](../../tests/test_capability.py) | L2 signed capabilities: forged, tampered, re-scoped, over-budget, expired, foreign-gateway |
+| [test_hardening.py](../../tests/test_hardening.py) | Regressions for the three fixes: detokenization scope, shared core state, fail-closed probes |
 
 ## `tools/` — experiment runners
 
 | File | Role |
 |---|---|
-| [run_live_matrix.sh](../../tools/run_live_matrix.sh) | Live experiment runner (root). For every scenario × mode cell, it restarts a fresh core + gNB + N UEs, waits for N active sessions, and runs one demo. |
+| [run_live_matrix.sh](../../tools/run_live_matrix.sh) | Live experiment runner (root). For every scenario × mode cell, it restarts a fresh core + WebConsole + gNB + N UEs, waits for N active sessions, and runs one demo; a run that changed nothing reuses the core. Presets: `final` (the report's 140-run matrix + double release), `latency` (precheck cells only). |
 | [_wait_sessions.py](../../tools/_wait_sessions.py) | Readiness probe used by the matrix runner: blocks until N UEs have an active PDU session. |
+| [_core_untouched.py](../../tools/_core_untouched.py) | Decides from a run's evidence record whether it sent any state-changing call, i.e. whether the next run may reuse the core. |
+| [double_release.py](../../tools/double_release.py) | Releases the same session twice without the gateway and records the SMF's answer → `results/evidence/double_release.jsonl`. |
 | [sweep.py](../../tools/sweep.py) | The same matrix offline, against the fake core → `benchmark/offline_evidence.jsonl`. |
 | [eval_curve.py](../../tools/eval_curve.py) | Replays generator traces through the real `PolicyEngine` across a rate-cap sweep → [EVAL_CURVE.md](../evaluation/EVAL_CURVE.md). |
 | [dataplane_nat.sh](../../tools/dataplane_nat.sh) | Optional data-plane NAT for the UE pool (`up` / `down` / `status`), so the demo can show ping-before / fail-after evidence (see [END_TO_END_FLOW.md §8.2](END_TO_END_FLOW.md)). |
-| [aggregate.py](../../tools/aggregate.py) | Turns an evidence JSONL into the ASR / leakage / FP / latency / attribution tables in [RESULTS.md](../evaluation/RESULTS.md). |
+| [aggregate.py](../../tools/aggregate.py) | Turns evidence JSONL into the ASR / leakage / FP / latency / per-cell / attribution tables in [RESULTS.md](../evaluation/RESULTS.md) (claim-only L2 runs get their own `(claim)` rows). |
 
 ## Vendored components
 

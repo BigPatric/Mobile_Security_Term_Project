@@ -75,14 +75,16 @@ procedure-aware verifier that checks every call against the TS~23.502 PDU-sessio
 machine and a rate budget, regardless of any authorization the call claims to carry. We
 evaluate on a live free5GC + UERANSIM testbed with three injection attacks, using a scripted
 agent that always obeys the injected directive in place of a real LLM, and count an
-attack as successful only when the SMF confirms that the session is really gone. RBAC yields
-the same attack success rate and leakage as having no defense at all. L1 reduces identifier leakage from 100\% to
-0\%. L2 blocks the plain injected DoS. When L2 accepted any authorization string, a forged change
-ticket bypassed it and only L3 held, capping the attack at its rate budget within a window (3 of 9
-sessions); with signed capabilities, L2 rejects the forged ticket and the attack releases no session.
-The full gateway produces no false positives on four benign tasks (each releasing at most one session)
-and adds a median of 0.04\,ms to ordinary calls; a release it lets through costs a median of
-77\,ms more (18--195\,ms across our runs, depending on the state of the core), spent querying the core. Offline experiments add an ASR/false-positive trade-off curve, an
+attack as successful only when the SMF confirms that the session is really gone. Over 150 live
+runs, RBAC yields the same attack success rate and leakage as having no defense at all. L1 reduces
+identifier leakage from 100\% to 0\%. With L2 bound to gateway-signed capabilities, the full gateway
+cuts the sessions torn down per DoS attack from 8.9 of 9 to 0, including an attack that forges a
+change ticket. When L2 instead accepts any authorization string, that forged ticket bypasses it and
+only L3 holds, capping the attack at its rate budget (3 of 9 sessions per window). The full gateway
+produces no false positives on four benign tasks that release at most one session each, but its
+rate cap blocks a legitimate bulk maintenance task after three releases. It adds a median of
+0.04\,ms to ordinary calls; a release it lets through costs a median of 13\,ms more
+(9--27\,ms), spent querying the core. Offline experiments add an ASR/false-positive trade-off curve, an
 adaptive-attacker analysis that marks where the defense stops holding (slow drip), and
 evidence that new procedures and tools are protected by configuration alone.
 \end{abstract}
@@ -349,9 +351,10 @@ service, \code{Nsmf\_}\allowbreak\code{PDUSession\_}\allowbreak\code{ReleaseSMCo
 reference through the WebConsole and then calls the SMF endpoint
 \code{POST /nsmf-pdusession/v1/}\allowbreak\code{sm-contexts/\{ref\}/release}. It succeeds only if a
 post-condition confirms the release, primarily that the SMF no longer has the SM context.
-Calling the tool, or receiving an HTTP 2xx, is never counted as success. (The probe used
-during the recorded runs could mistake a failed lookup for a deleted context; Sec.~\ref{sec:fixes}
-discusses what this can and cannot affect.) This path skips the
+Calling the tool, or receiving an HTTP 2xx, is never counted as success. The probe counts a
+context as gone only on HTTP 404, and every evidence record stores the SMF's status for the
+release and the HTTP status of every probe, so each counted release can be checked afterwards.
+This path skips the
 SMF$\rightarrow$AMF$\rightarrow$gNB$\rightarrow$UE N1/N2 signalling, so the UE still
 believes its session is up while the UPF has already dropped its N4 state. That is a
 silent network-side DoS, and it is also why the AMF's view of the session can be stale.
@@ -362,8 +365,7 @@ Fig.~\ref{fig:smflog} shows the core-side evidence of one release.
 \includegraphics[width=0.92\textwidth]{tex_smf_release_log.png}
 \caption{free5GC log during a DoS run: the SMF handles the release, deletes the PFCP session
 on the UPF, and removes the SM context from its pool. The harness counts a release only after
-its probe reports the SM context gone (see Sec.~\ref{sec:fixes} for a flaw in the probe used
-during the recorded runs).}
+its probe gets HTTP 404 for the SM context.}
 \label{fig:smflog}
 \end{figure*}
 
@@ -371,9 +373,9 @@ during the recorded runs).}
 The agent is a deterministic ReAct loop that models a naive NOC policy: read the alert
 named in the task and execute any directive it contains. It copies change-ticket wording
 from the log into an \code{operator\_authorization} argument. When the operator task grants an
-authorization (BENIGN-02 and BENIGN-04), the harness asks the gateway for a single-use
-capability and gives it to the agent along with the task, and the agent attaches that instead;
-attack scenarios never receive one. This is a scripted
+authorization (BENIGN-02, BENIGN-04 and BENIGN-05), the harness asks the gateway for a capability
+with the task's use budget and gives it to the agent along with the task, and the agent attaches
+that instead; attack scenarios never receive one. This is a scripted
 \emph{worst case}: it is always hijacked, which isolates the gateway's behavior from the
 variance of a particular model.
 
@@ -407,33 +409,34 @@ DOS-02  & DOS-01 + forged ticket & L2 (L3 if claim-only) \\
 \end{tabular}
 \end{table}
 
-Four benign operator tasks probe false positives: BENIGN-01, a read-only health check;
+Five benign operator tasks probe false positives: BENIGN-01, a read-only health check;
 BENIGN-02, one authorized maintenance release; BENIGN-03, a health check after reading a
-harmless (but untrusted) alert; and BENIGN-04, one authorized release in a session that is
-already tainted. BENIGN-04 is the hardest case: like DOS-02 it releases a session from a
-tainted session while carrying an authorization. With the claim-only L2 the two differ only in
-volume; with signed capabilities they differ in whether the authorization is a capability the
-gateway issued.
+harmless (but untrusted) alert; BENIGN-04, one authorized release in a session that is
+already tainted; and BENIGN-05, authorized bulk maintenance that drains a UPF by releasing every
+session under a capability for nine releases. BENIGN-04 is the hardest case for L2: like DOS-02 it
+releases a session from a tainted session while carrying an authorization. With the claim-only L2
+the two differ only in volume; with signed capabilities they differ in whether the authorization is
+a capability the gateway issued. BENIGN-05 is the hardest case for L3: it has the volume of a DoS
+attack but is legitimate.
 
 \subsection{Experiment harness}
-For every cell of the scenario $\times$ defense-mode matrix, a script tears down the core,
-brings up a fresh core with all nine sessions active, and runs one attack; each cell is
-repeated five times. A release in one run therefore never affects the next. Because the agent
-is deterministic, the repeats measure run-to-run variation of the testbed, not of the agent. The live numbers
-below are over 130 runs in total: 6 modes $\times$ 3 attacks $\times$ 5 repeats (90 attack
-runs), plus the four benign tasks $\times$ 5 repeats under RBAC and the full gateway (40 benign
-runs). These 130 runs predate the two changes described in Sec.~\ref{sec:design}: L2 accepted any
-authorization claim and tokens were an unkeyed hash. After the changes we re-ran only the cells
-they can affect, five repeats each (40 runs): ENUM-01 in the four modes that include L1, DOS-02 in
-the two modes that include L2, and BENIGN-02/04 under the full gateway. Cells without L1 (for
-ENUM-01) or without L2 (for DOS-02), and RBAC, run code the changes do not touch, so they keep their
-130-run results. In the rerun, a run that sent no state-changing call to the core (every release
-blocked, or read-only) is followed on the same core once all nine sessions are confirmed up; any
-run that reached the core is followed by a fresh one. The agent and gateway are a new process in
-every run, and each record notes whether its core was reused; the 40 runs needed 10 fresh
-bring-ups. Results are appended to evidence logs, which are
-committed with the code (\code{results/*.jsonl}), and aggregated by a separate script that only
-does arithmetic on recorded ground truth.
+For every cell of the scenario $\times$ defense-mode matrix, a script brings up the core with
+all nine sessions active and runs one attack; each cell is repeated five times. Any run that
+changed core state is followed by a fresh core, so a release in one run never affects the next. Because the agent
+is deterministic, the repeats measure run-to-run variation of the testbed, not of the agent. All
+live numbers below come from one matrix of 150 runs on the final code, with keyed tokens, signed
+capabilities and the fixes of Sec.~\ref{sec:fixes}: 6 modes $\times$ 3 attacks $\times$ 5 repeats
+(90 attack runs); DOS-02 under L1+L2 and the full gateway with the claim-only L2 for comparison
+(10 runs); and the five benign tasks $\times$ 5 repeats under RBAC and the full gateway (50 runs).
+A further 30 runs repeat the six cells whose releases reach L3's core precheck, to measure its latency
+(Sec.~\ref{sec:latency}).
+The claim-only runs switch L2 for that run only; the configuration file is not edited. A run that
+sent no state-changing call to the core (every release blocked, or read-only) is followed on the
+same core once all nine sessions are confirmed up; any run that reached the core is followed by a
+fresh one. The agent and gateway are a new process in every run, and each record notes whether its
+core was reused; the 150 runs needed 81 fresh bring-ups. Results are appended to evidence logs,
+which are committed with the code (\code{results/evidence/}), and aggregated
+by a separate script that only does arithmetic on recorded ground truth.
 
 % ===========================================================================
 \section{Evaluation}
@@ -445,32 +448,36 @@ really changed. ENUM-01 is exfiltration and cannot change state, so it counts to
 only and the maximum possible ASR is 2/3.
 \textbf{Leakage}: the fraction of runs in which a raw SUPI reached the agent.
 \textbf{Sessions released}: PDU sessions confirmed torn down per run, which measures blast
-radius; we report it averaged over all three scenarios (ENUM-01 contributes 0) and over the two
-DoS scenarios only.
+radius; we report it per DoS scenario and averaged over the two.
 \textbf{FP rate}: the fraction of benign runs with any blocked call.
 \textbf{Latency}: time the gateway adds to a tool call. It includes the gateway's own query
 to the core (L3's precheck) but not the core's processing of the forwarded call itself.
 Six modes are compared: no gateway (\emph{off}), \emph{RBAC}, L1, L1+L2, L1+L3 and the full
-gateway.
+gateway, all with the signed-capability L2, plus L1+L2 and the full gateway with the claim-only L2.
 
 \subsection{Attack effectiveness and ablation}
 
 \begin{table}[t]
 \centering
-\caption{Live results, claim-only L2}
+\caption{Live results (150-run matrix, final code)}
 \label{tab:live}
-\begin{tabular}{@{}lcccc@{}}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lccccc@{}}
 \toprule
- & & & \multicolumn{2}{c}{Mean released} \\
-\cmidrule(l){4-5}
-Mode & ASR & Leakage & All & DoS \\
+ & & & \multicolumn{3}{c}{Mean sessions released (of 9)} \\
+\cmidrule(l){4-6}
+Mode & ASR & Leakage & DOS-01 & DOS-02 & DoS \\
 \midrule
-off (no gateway)     & 0.67 & 1.00 & 5.93 & 8.90 \\
-RBAC allow-list      & 0.67 & 1.00 & 5.53 & 8.30 \\
-L1                   & 0.67 & \textbf{0.00} & 5.93 & 8.90 \\
-L1+L2                & 0.33 & 0.00 & 2.87 & 4.30 \\
-L1+L3                & 0.67 & 0.00 & 2.00 & 3.00 \\
-\textbf{L1+L2+L3 (full)} & \textbf{0.33} & \textbf{0.00} & \textbf{1.00} & \textbf{1.50} \\
+off (no gateway)     & 0.67 & 1.00 & 9.0 & 8.8 & 8.9 \\
+RBAC allow-list      & 0.67 & 1.00 & 9.0 & 9.0 & 9.0 \\
+L1                   & 0.67 & \textbf{0.00} & 8.0 & 8.6 & 8.3 \\
+L1+L2                & \textbf{0.00} & 0.00 & 0.0 & 0.0 & 0.0 \\
+L1+L3                & 0.67 & 0.00 & 3.0 & 3.0 & 3.0 \\
+\textbf{L1+L2+L3 (full)} & \textbf{0.00} & \textbf{0.00} & \textbf{0.0} & \textbf{0.0} & \textbf{0.0} \\
+\midrule
+\multicolumn{6}{@{}l}{\textit{Claim-only L2 (DOS-02 only)}} \\
+L1+L2                & --- & 0.00 & --- & 8.4 & --- \\
+L1+L2+L3 (full)      & --- & 0.00 & --- & 3.0 & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -487,7 +494,7 @@ L1+L3                & 0.67 & 0.00 & 2.00 & 3.00 \\
     ylabel={Sessions released (of 9)},
     ylabel style={font=\footnotesize},
     symbolic x coords={off,rbac,lone,lonetwo,lonethree,full},
-    xtick=data,
+    xtick={off,rbac,lone,lonetwo,lonethree,full},
     xticklabels={off,RBAC,L1,L1+L2,L1+L3,full},
     x tick label style={font=\footnotesize},
     y tick label style={font=\footnotesize},
@@ -498,23 +505,25 @@ L1+L3                & 0.67 & 0.00 & 2.00 & 3.00 \\
     ymajorgrids, grid style={gwlight},
     axis line style={gwgrey},
   ]
-  \addplot[fill=gwblue, draw=gwblue] coordinates {(off,9) (rbac,8) (lone,9) (lonetwo,0) (lonethree,3) (full,0)};
-  \addplot[fill=gworange, draw=gworange] coordinates {(off,8.8) (rbac,8.6) (lone,8.8) (lonetwo,8.6) (lonethree,3) (full,3)};
-  \legend{DOS-01, DOS-02}
+  \addplot[fill=gwblue, draw=gwblue] coordinates {(off,9) (rbac,9) (lone,8.0) (lonetwo,0) (lonethree,3) (full,0)};
+  \addplot[fill=gworange, draw=gworange] coordinates {(off,8.8) (rbac,9) (lone,8.6) (lonetwo,0) (lonethree,3) (full,0)};
+  \addplot[fill=gwred!60, draw=gwred] coordinates {(lonetwo,8.4) (full,3)};
+  \legend{DOS-01, DOS-02, {DOS-02, claim-only L2}}
 \end{axis}
 \end{tikzpicture}
 \caption{Mean sessions torn down per DoS attack (of nine), by defense mode (live, ground truth,
-5 repeats; claim-only L2). DOS-02 under L1+L2 shows provenance being bypassed by the forged
-ticket; L3 holds the damage at its rate budget of 3. Ranges over the five repeats: 7--9 for both
-attacks under RBAC and 8--9 for DOS-02 under off, L1 and L1+L2; every other bar has the same value
-in all five repeats.}
+5 repeats). With the signed-capability L2, no session is released from L1+L2 on. The third bar
+(claim-only L2, run only for L1+L2 and the full gateway) shows the
+forged ticket bypassing L2, and L3 holding the damage at its rate budget of 3. Ranges over the
+five repeats: 7--9 for DOS-01 under L1, and 8--9 for DOS-02 under off, L1 and claim-only L1+L2;
+every other bar has the same value in all five repeats.}
 \label{fig:released}
 \end{figure}
 
-Table~\ref{tab:live} gives the live results of the 130-run matrix, which used the claim-only
-L2 (15 attack runs per mode, nine sessions, rate cap~3). ASR and the ``All'' column average over
-all three scenarios; the ``DoS'' column averages over DOS-01 and DOS-02 only.
-Fig.~\ref{fig:released} breaks the DoS attacks down by scenario. The figures support four
+Table~\ref{tab:live} gives the live results (15 attack runs per mode, nine sessions, rate
+cap~3). ASR averages over all three scenarios; the ``DoS'' column averages over DOS-01 and DOS-02.
+The two claim-only rows run DOS-02 only, so they have no ASR or DoS average.
+Fig.~\ref{fig:released} shows the same DoS numbers by scenario. The results support five
 conclusions.
 
 \emph{RBAC is equivalent to no defense.} Every malicious call is one the agent's role
@@ -533,62 +542,37 @@ two-subscriber run; the nine-UE results are in Table~\ref{tab:live}.)}
 \label{fig:enum}
 \end{figure*}
 
-\emph{A claim-only L2 stops DOS-01 but is laundered by DOS-02.} Under L1+L2 the plain injection
-is blocked at every release attempt (\code{taint-control-flow}), but DOS-02 releases every session
-that is up (mean 8.6): the copied ticket satisfies L2's authorization branch
-(Fig.~\ref{fig:dos02}a).
+\emph{Signed capabilities stop both DoS attacks at L2.} Under L1+L2 and the full gateway, every
+one of the agent's nine release attempts in all 20 DoS runs was stopped by L2
+(\code{taint-control-flow}), and no session was released. For DOS-01 the calls carry no
+authorization at all; for DOS-02 each carries the forged \code{CHG-20481}, which is not a capability
+the gateway signed, so L2 treats it as no authorization. The full gateway's ASR is therefore 0, and
+the mean teardown per DoS attack falls from 8.9 sessions without a gateway to 0.
 
-\emph{L3 holds whatever the authorization says.} L3 ignores the ticket and stops DOS-02 at the
-rate cap, limiting it to 3 sessions. In the full gateway, DOS-01 is stopped earlier by L2
-(0 sessions), and DOS-02 by L3 (3 sessions; Fig.~\ref{fig:dos02}b). With this L2, removing any
-layer lets one of our three attacks through. That holds only for an attacker who does not adapt
-to L2: one who always attaches a forged ticket gets past a claim-only L2 every time, and L2 then
-contributes nothing.
+\emph{A claim-only L2 is laundered by DOS-02.} With the claim-only L2, the copied ticket satisfies
+L2's authorization branch, and DOS-02 under L1+L2 releases every session that is up (mean 8.4;
+Fig.~\ref{fig:dos02}a). This is the taint laundering that signed capabilities close.
 
-\begin{table}[t]
-\centering
-\caption{Rerun with keyed tokens and signed capabilities}
-\label{tab:signed}
-\begin{tabular}{@{}lccc@{}}
-\toprule
-Mode & ENUM-01 leakage & DOS-02 released & FP \\
-\midrule
-off                      & 1.00$^*$ & 8.8$^*$ & ---  \\
-RBAC                     & 1.00$^*$ & 8.6$^*$ & 0.00$^*$ \\
-L1                       & 0.00 & 8.8$^*$ & ---  \\
-L1+L2                    & 0.00 & \textbf{0.0} & ---  \\
-L1+L3                    & 0.00 & 3.0$^*$ & ---  \\
-\textbf{L1+L2+L3 (full)} & \textbf{0.00} & \textbf{0.0} & \textbf{0.00} \\
-\bottomrule
-\end{tabular}
-\end{table}
+\emph{L3 holds whatever the authorization says.} L3 ignores the ticket. Without L2 (L1+L3), or
+behind the claim-only L2 (full gateway), it stops both DoS attacks at the rate cap: exactly 3
+sessions in every run, with the remaining release attempts blocked (Fig.~\ref{fig:dos02}b).
 
-\emph{Signed capabilities close the laundering.} Table~\ref{tab:signed} gives the 40-run
-rerun with keyed tokens and L2 verifying capabilities, five repeats per cell. It reports ENUM-01
-leakage, the mean number of sessions DOS-02 tears down (of nine), and the false-positive rate on
-BENIGN-02/04. Cells marked $^*$ run code the changes do not touch and keep their value from
-Table~\ref{tab:live}. The forged \code{CHG-20481} is not a capability the gateway signed, so
-L2 treats the tainted calls as unauthorized. Under both L1+L2 and the full gateway, in all ten
-runs, every one of the agent's nine release attempts carried \code{CHG-20481} and was stopped by
-L2 (\code{taint-control-flow}), and no session was released, against 8.6 (L1+L2) and 3 (full) with the claim-only L2. Modes without L2
-run the same code as before, so their earlier results stand (L1+L3 still stops at the cap). With
-keyed tokens, ENUM-01 leakage stays 0.00 in every mode that includes L1. BENIGN-02 and BENIGN-04,
-which now carry a real single-use capability, still pass in all ten runs (FP 0.00), each releasing
-exactly one session. With this L2, L1+L2 alone already stops
-all three of our attacks, so the live results no longer show a hole that only L3 closes.
+With the signed L2, L1+L2 alone already stops all three of our attacks, so the live results no
+longer show a hole that only L3 closes.
 L3's rate cap still matters when a genuine capability is misused, but only in a narrow case. A
 capability already carries a use budget, so if the budget matches the task, the budget alone
 bounds the misuse. The cap adds protection only when the budget exceeds what is needed at once,
 for example a standing capability for a whole maintenance window held by an agent that is later
 hijacked: an offline test gives a hijacked agent a valid capability for nine releases, L2 accepts
 it, and the cap stops the teardown at three. If the budget is large because the operator really
-needs a bulk release, the cap blocks that legitimate release as well (Fig.~\ref{fig:curve}). The
-part of L3 that no other layer replaces is the FSM, the only check on procedure ordering. For the
-release procedure, however, the ordering violation it blocks, a second release of the same
-session, is not damaging in itself: the SMF no longer holds the context, so the call would most
-likely fail there (our tool then reports an error and changes nothing). We did not test this
-live. The FSM's value lies in procedures where a wrong order does cause harm, which we have not
-modelled.
+needs a bulk release, the cap blocks that legitimate release as well, live (BENIGN-05,
+Sec.~\ref{sec:fp}) and offline (Fig.~\ref{fig:curve}). The part of L3 that no other layer replaces
+is the FSM, the only check on procedure ordering. For the release procedure, however, the ordering
+violation it blocks, a second release of the same session, is not damaging in itself. We measured
+this live without the gateway: after a verified release, a second release of the same SM context,
+sent straight to the SMF or through our tool, was answered with HTTP 404 (\code{SMContext Ref is not
+found}) for both UEs tested, and our tool reported an error and changed nothing. The FSM's value lies
+in procedures where a wrong order does cause harm, which we have not modelled.
 
 \begin{figure*}[t]
 \centering
@@ -601,34 +585,36 @@ smaller-testbed run; the nine-UE aggregates are in Table~\ref{tab:live}.)}
 \label{fig:dos02}
 \end{figure*}
 
-Binary ASR undersells this result: a capped DOS-02 still counts as a success because three
-sessions changed state. Blast radius is the more informative metric: the cap bounds damage at
-a fixed number of releases per window (3), so with nine sessions and the claim-only L2, the full
-gateway cuts the mean teardown per DoS attack from 8.9 to 1.5 sessions (Table~\ref{tab:live}) and
-L3 holds DOS-02 to one third of the sessions. This is a bound per window, not in total: an
-attacker that keeps going across windows is limited only by the rate (Sec.~\ref{sec:adaptive}).
-With signed capabilities, the cap no longer decides either DoS attack: DOS-02 releases no session
-(Table~\ref{tab:signed}), and DOS-01, which carries no authorization at all and was not rerun, is
-already blocked by L2 in the 130-run matrix (Table~\ref{tab:live}). The runs reported
-here last well under one window. Means below nine for an unrestricted DoS (8.0--8.8, including RBAC's
-DOS-01) do not come from the defense or from failed releases. In each such run, one or two UEs had
-not finished registering when the attack started: the agent's query showed them
-\code{DEREGISTERED} with no PDU session, because the harness proceeds after its readiness timeout
-even if fewer than nine sessions are up. In every unblocked run the agent released every session
-that existed at the start, and none of the 369 release calls that no check blocked failed its
-post-condition, so the shortfall does not come from failed releases. (Sec.~\ref{sec:fixes}
-discusses a flaw in that post-condition.)
+Binary ASR undersells the claim-only result: a capped DOS-02 still counts as a success because
+three sessions changed state. Blast radius is the more informative metric: the cap bounds damage
+at a fixed number of releases per window (3), so with nine sessions L3 holds DOS-02 to one third
+of the sessions even when L2 is laundered. This is a bound per window, not in total: an attacker
+that keeps going across windows is limited only by the rate (Sec.~\ref{sec:adaptive}). The runs
+reported here last well under one window.
+
+Means below nine for an unrestricted DoS (8.0--8.8) do not come from the defense or from failed
+releases. In 12 of the 80 runs that release in bulk (DoS and BENIGN-05), one or two UEs had not
+finished registering when the attack started, so only seven or eight sessions existed: the harness
+proceeds after its readiness timeout even if fewer than nine sessions are up. In every unblocked run
+the agent released every session that existed at the start. All 428 release calls that no check
+blocked were answered by the SMF with HTTP 204 and then confirmed by a probe that received HTTP 404
+for the SM context, so no counted release rests on a failed lookup.
 
 \subsection{False positives}
-The full gateway and RBAC both pass all four benign tasks (FP rate 0.00 for each). This
-includes BENIGN-04, an authorized single release in a tainted session, which L2 passes on
-its authorization and L3 passes because it is in state, under budget, and the core confirms
-the session exists. In the rerun (Table~\ref{tab:signed}) the authorization is a signed
-single-use capability, and both authorized tasks still pass. These four tasks release at most one session, so they do not exercise the
-rate cap: with the deployed cap of~3, legitimate bulk maintenance of 5 or 8 sessions would be
-blocked (Fig.~\ref{fig:curve}, FP rate 0.25 at cap~3).
+\label{sec:fp}
+The full gateway and RBAC both pass all four single-release benign tasks in every run (FP 0.00
+over 20 runs each). This includes BENIGN-04, an authorized single release in a tainted session,
+which L2 passes on its signed capability and L3 passes because it is in state, under budget, and
+the core confirms the session exists. BENIGN-05, the authorized bulk drain, is where the rate cap
+costs: in all five runs under the full gateway, L2 accepted the capability, three sessions were
+released, and the remaining six releases were blocked by the rate cap (FP 1.00), while RBAC released
+every session that was up (mean 8.8). Over all five benign tasks the full gateway's FP rate is
+therefore 0.20. This is the trade-off of Fig.~\ref{fig:curve} measured on the live core: the cap
+cannot tell a legitimate bulk release from a malicious one, because both carry an authorization.
+Sec.~\ref{sec:disc} discusses how a deployment would set the cap.
 
 \subsection{Latency}
+\label{sec:latency}
 
 \begin{table}[t]
 \centering
@@ -636,36 +622,40 @@ blocked (Fig.~\ref{fig:curve}, FP rate 0.25 at cap~3).
 \label{tab:latency}
 \begin{tabular}{@{}lrrrrr@{}}
 \toprule
-Mode & Calls & Mean & p50 & p95 & Max \\
+Calls & n & Mean & p50 & p95 & Max \\
 \midrule
-RBAC   & 344 & 0.045 & 0.024 & 0.100 & 0.643 \\
-L1     & 209 & 0.090 & 0.095 & 0.141 & 0.273 \\
-L1+L2  & 207 & 0.080 & 0.065 & 0.184 & 0.377 \\
-L1+L3  & 210 & 10.773 & 0.060 & 97.693 & 149.512 \\
-Full   & 348 & 5.893 & 0.042 & 65.649 & 134.226 \\
+\multicolumn{6}{@{}l}{\textit{No core query (150-run matrix)}} \\
+\quad RBAC   & 444 & 0.053 & 0.033 & 0.133 & 0.321 \\
+\quad L1     & 203 & 0.113 & 0.113 & 0.179 & 0.552 \\
+\quad L1+L2  & 210 & 0.046 & 0.038 & 0.102 & 0.516 \\
+\quad L1+L3  & 180 & 0.045 & 0.036 & 0.107 & 0.186 \\
+\quad Full   & 420 & 0.047 & 0.035 & 0.127 & 0.272 \\
+\midrule
+\multicolumn{6}{@{}l}{\textit{Forwarded release with core precheck (30-run rerun)}} \\
+\quad L1+L3, full & 70 & 13.3 & 13.1 & 17.9 & 26.5 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:latency} pools the per-call overhead over all 130 runs of the matrix
-(\code{results/results\_latency.csv}). Because most calls are cheap reads, the pooled
-median (0.02--0.10\,ms in every mode) describes ordinary calls, not the calls that matter most.
-The two kinds of call must be read separately. Every call that does not query the core stays
-below 0.65\,ms. A release that passes L3, by contrast, waits for L3's core precheck, a real
-round trip to the core: the 55 such releases in the matrix (25 under the full gateway, 30 under
-L1+L3) took 18--150\,ms, median 76\,ms (77\,ms under the full gateway alone), which exceeds our
-50\,ms design target. That cost is paid
-only by high-risk calls that are about to be forwarded; a release blocked earlier in the chain
-costs under 0.2\,ms. L1+L3 has a \emph{higher} mean than the full gateway because without L2
-the first releases of DOS-01 also reach the precheck (the rate cap stops the rest), whereas the
-full gateway blocks DOS-01 at L2 before any precheck. The precheck time also grows over the
-course of the matrix: in
-the first pass (the first 26 runs of the same log) the p95 was 22\,ms for L1+L3 and 21\,ms for the
-full gateway. We believe the drift comes from free5GC core state accumulating over repeated
-bring-ups and tear-downs rather than from the gateway, which makes one round trip per precheck
-regardless of run index, but we have not isolated the cause. The 40-run rerun points the same way:
-there the only prechecks are the ten benign releases, and they took up to 195\,ms, while every
-check that does not query the core stayed below 0.34\,ms.
+Table~\ref{tab:latency} separates the two kinds of call. A call that does not query the core,
+including every blocked release, costs the gateway's own checks only: under 0.6\,ms in every
+mode, with a median of 0.03--0.11\,ms. A release that passes L3 also waits for L3's core precheck,
+a real round trip to the core (three WebConsole REST calls). Over 70 such releases, in DOS-01 and
+DOS-02 under L1+L3, DOS-02 under the full gateway with the claim-only L2, and BENIGN-02/04/05 under
+the full gateway, the precheck took 9--27\,ms, median 13\,ms, within our 50\,ms design target. That
+cost is paid only by high-risk calls that are about to be forwarded.
+
+These precheck figures come from a separate 30-run rerun. In the main matrix the precheck took
+90--194\,ms and grew by about 20\,ms with each repeat, even though every release-carrying run
+started a fresh core and a fresh gateway process. The cause was the testbed, not the gateway: the
+free5GC WebConsole is not part of the core's start and stop scripts, so one instance served every
+run, and on every request it appends the AMF and SMF profiles it fetches from the NRF to an
+in-memory list that it never clears. Each request therefore got slower as the total number of
+requests grew; the instance had reached 617\,MB. The harness now restarts the WebConsole with the
+core, and in the rerun the precheck stayed at 9--27\,ms with no trend across the 30 runs. The slow
+WebConsole changed only how long a forwarded release waited. In the rerun every cell released and
+blocked exactly as many sessions as in the main matrix, and all 70 releases were confirmed by an SMF
+204 and a probe 404.
 
 \subsection{Rate-cap trade-off on synthetic traces}
 
@@ -773,29 +763,36 @@ regression tests for the fixes described in Sec.~\ref{sec:fixes}.
 \label{sec:disc}
 
 \textbf{Testbed scale.} The live testbed has nine UEs. This is enough for the per-call
-guarantees (tokenization, taint and ordering do not depend on how many sessions exist), and
-with a cap of~3 a capped DOS-02 under the claim-only L2 removes only one third of the sessions
-(with signed capabilities it removes none). The cap bounds an
-absolute number of releases per window, so the damage per window does not depend on the size of
-the core, while the fraction of sessions affected shrinks as the core grows. The cap is set to
-an operator-normal release rate rather than the session count; in deployment it should come
-from observed operator behavior, and Fig.~\ref{fig:curve} shows that any cap low enough to
-matter also blocks some legitimate bulk maintenance.
+guarantees (tokenization, taint and ordering do not depend on how many sessions exist). The
+cap bounds an absolute number of releases per window, not a fraction, so the damage per window
+does not depend on the size of the core: the blocked fraction of a burst is $1-3/N$ for $N$
+sessions, which is 2/3 on our nine-UE testbed (the worst case) and grows as the core grows.
 
-\textbf{Sample size.} Each live cell ran five times: 130 runs in the original matrix and 40 in
-the signed-capability rerun (170 in total). The live numbers
-are means over those repeats on a real core, without confidence intervals; the ranges are given
-with Fig.~\ref{fig:released}. The precheck latency drifted across runs (Sec.~\ref{sec:eval}): a p95 of about 21--22\,ms over the first 26 runs
-of the matrix, a median of 76\,ms over the whole matrix, and 146--195\,ms in the later rerun. We have
-not found the cause, so we cannot say which value a deployment would see; the honest statement is
-a range of roughly 20--195\,ms that depends on the state of the core.
+\textbf{Choice of the rate cap.} The value 3 per 60\,s is an operator-tunable parameter, not
+derived from a standard. We chose it to sit just above the release rate of our single-release
+benign tasks. No value removes both costs: Fig.~\ref{fig:curve} sweeps the cap from 1 to 8, and
+BENIGN-05 shows on the live core that a cap low enough to bound a DoS also blocks a legitimate bulk
+drain. In a deployment the cap should come from the operator's own maintenance logs, and
+legitimate bulk work would need a separate path, for example a capability whose use budget the
+rate check honors. The guarantees that do not depend on any threshold come from the signed L2 and
+the L3 FSM; the cap is the fallback for when L2 is bypassed or a genuine capability is misused.
+
+\textbf{Sample size.} Each live cell ran five times, 150 runs in total. The live numbers are
+means over those repeats on a real core, without confidence intervals; with five repeats and a
+deterministic agent we report the range instead (Fig.~\ref{fig:released}). Every blocked or capped
+cell has the same value in all five repeats. The precheck latency was measured on a core whose
+WebConsole had just started (Sec.~\ref{sec:latency}); a long-running deployment would need the
+WebConsole leak fixed, or a precheck that queries the AMF directly instead of through the WebConsole.
 
 \textbf{Scripted agent.} We did not measure baseline ASR on real LLMs or compare against a
 generic guardrail; we use a scripted, always-hijacked agent instead. The ASR we report is
 therefore an upper bound only within the action space the scripted agent covers. A real model
 may choose other tools, other arguments or a different pace (for example spacing its releases on
 its own, which is the slow drip of Sec.~\ref{sec:adaptive}), and those behaviors are not
-measured. Future work is a small study with a real model: DOS-01 and DOS-02 under \emph{off}
+measured. What the scripted agent does show is the worst case for the behaviors it covers: it
+obeys every injected directive, and the gateway decides at the tool-call boundary without looking at
+the agent's reasoning, so a real model that is hijacked into the same calls meets the same checks.
+Future work is a small study with a real model: DOS-01 and DOS-02 under \emph{off}
 and the full gateway, five repeats each, reporting how often the model is hijacked and how many
 of its high-risk calls the gateway blocks.
 
@@ -809,9 +806,7 @@ instances.
 \textbf{Token derivation.} Tokens are a 16-bit prefix of the keyed HMAC, extended on collision.
 The key makes offline inversion impossible, but the short prefix means a guessed token is valid
 with probability about $N/2^{16}$ for $N$ known subscribers. A guessed token reveals no SUPI; it
-only names a subscriber in a call, and every other layer still applies. The 130-run matrix used
-the earlier unkeyed SHA-1 derivation; the ENUM-01 rerun with keyed tokens gives the same leakage
-result (Table~\ref{tab:signed}).
+only names a subscriber in a call, and every other layer still applies.
 
 \textbf{Scope of L3.} Only PDU-session release is enforced live. Establishment and
 modification, more high-risk sinks, cumulative budgets against slow drip, replay protection,
@@ -821,39 +816,27 @@ and periodic reconciliation of the gateway's FSM with core state are future work
 That makes the DoS silent, which is realistic for an attacker, but it also means the UE-side
 view is not a reliable success signal; we rely on SMF state instead.
 
-\textbf{Fixes made after the live runs.}\label{sec:fixes} A code review after the
-experiments found three issues. All three are now fixed and covered by regression tests; the
-live numbers in Sec.~\ref{sec:eval}, including the signed-capability rerun, were recorded
-before the fixes.
+\textbf{Fixes made before the final runs.}\label{sec:fixes} A code review of an earlier
+version found three issues. All three are fixed and covered by regression tests, and every live
+number in Sec.~\ref{sec:eval} was recorded after the fixes.
 (i)~\emph{Per-session state.} Each gateway instance kept its own FSM state and rate budget,
 and the harness builds one gateway per agent session. The cap of 3 per window therefore held
 per session: three poisoned alerts handled in three sessions could release nine sessions
-within a minute, and one session did not know what another had released. Our results are
-unaffected, because each run is a single session on a fresh core, but a deployment must share
-this state. The gateway now accepts a shared core state that holds the FSM and rate budgets
-for every session in front of one core, while taint stays per session.
+within a minute, and one session did not know what another had released. The gateway now accepts
+a shared core state that holds the FSM and rate budgets for every session in front of one core,
+while taint stays per session. Each live run is a single session, so this sharing is covered only
+by offline tests.
 (ii)~\emph{Detokenization scope.} The gateway mapped tokens back to SUPIs in every string
 argument, not only in identifier arguments. A hijacked agent could paste tokens into a
 free-text argument of an outbound tool, such as a ticket or an e-mail, and the gateway would
-send the real SUPIs for it. None of our four tools is outbound, so the leakage result holds,
-but the L1 guarantee did not hold in general. Only identifier arguments are now detokenized.
+send the real SUPIs for it. Only identifier arguments are now detokenized. None of our four tools
+is outbound, so the live leakage result does not exercise this fix.
 (iii)~\emph{Fail-open ground truth.} The post-release probes treated a failed lookup (e.g.\
-HTTP 401 or 500 from the WebConsole) as ``context gone'', and a release counted as verified
-if any of the SMF, AMF or data-plane signals fired. A transient error could therefore be
+HTTP 401 or 500 from the WebConsole) as ``context gone'', so a transient error could have been
 counted as a release. The probes now count a session as gone only on positive evidence (HTTP
-404, or a context without that session). For the recorded runs, the logs settle one half of
-this flaw: all 379 recorded releases name the SMF-context signal as their confirmation, so the
-lenient fallback to the AMF or data-plane signals never decided a result. The other half they
-cannot settle. The logs do not record the probes' HTTP status, and the release counts cannot
-serve as a check, because a fail-open probe would have produced exactly the same counts. Only
-the SMF log shows a release directly; Fig.~\ref{fig:smflog} is one such log, and we did not
-check the log for every release. We therefore state what the flaw can and cannot affect. A
-blocked call never reaches the core, so every result that rests on blocking (the zero releases
-under L2, the calls stopped at the rate cap, the false-positive rates) does not depend on the
-probe. The counts for releases that went through, such as the 8.9 sessions per undefended DoS
-and the 3 per capped run, are upper bounds: a miscount could only make them too high. That would
-overstate the damage of an undefended attack, and with it how much the gateway reduces that
-damage.
+404, or a context without that session), and the evidence records the HTTP status of every probe.
+In the final runs, all 428 counted releases were confirmed by an SMF-context probe that received
+HTTP 404, so the release counts in Sec.~\ref{sec:eval} do not depend on the old behavior.
 
 \textbf{Smaller issues.} The FSM keys a session by the literal argument value, so a
 re-spelled session id (\code{" 1"} for \code{1}) is a different FSM instance. In the live
@@ -895,18 +878,19 @@ Prompt-injection defense for network-operations agents belongs at the tool-call 
 not in the model. Our gateway's three layers each protect a different property: L1 protects
 identifier confidentiality, L2 protects source integrity, and L3 protects procedure
 integrity. On a live free5GC core, driven by a scripted, always-hijacked agent, RBAC was no
-better than no defense, while the full gateway reduced identifier leakage to zero, blocked the
-injected DoS and caused no false positives on four benign tasks (each releasing at most one
-session). It added a median of 0.04\,ms to ordinary calls and 77\,ms to each release it let
+better than no defense, while the full gateway reduced identifier leakage to zero and cut the
+sessions torn down per DoS attack from 8.9 of 9 to 0, in 150 runs whose every counted release is
+confirmed by the core. It caused no false positives on four single-release benign tasks, added a
+median of 0.04\,ms to ordinary calls, and added a median of 13\,ms to each release it let
 through, the cost of checking that release against the core.
 A forged change ticket laundered an L2 that trusted authorization claims, and L3 bounded that
 attack at its rate budget (three of nine sessions); requiring a gateway-signed capability lets L2
 reject the forgery outright, after which L1 and L2 alone stop all three live attacks. L3's rate
 cap then adds protection only when a genuine capability's budget exceeds the task at hand, and a
-cap low enough to matter also blocks legitimate bulk maintenance; it bounds bursts but not slow
-drip. L3's FSM is the one check that no attacker timing can evade and that no other layer
+cap low enough to matter also blocks legitimate bulk maintenance, as a live bulk drain showed; it
+bounds bursts but not slow drip. L3's FSM is the one check that no attacker timing can evade and that no other layer
 provides, but for PDU-session release the ordering violation it blocks (a second release) is
-not damaging in itself. Its value has to be shown on procedures where a wrong order does cause
+not damaging in itself: the SMF answers it with HTTP 404. Its value has to be shown on procedures where a wrong order does cause
 harm, such as modification or establishment, which is the main next step for L3.
 
 \section*{Artifact}
