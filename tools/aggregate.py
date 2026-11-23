@@ -19,7 +19,7 @@ claims, grouped by gateway MODE (off / rbac / L1 / L1+L2 / L1+L3 / L1+L2+L3):
 
 Usage:
     python3 tools/aggregate.py [evidence.jsonl ...]         # default: attack_evidence.jsonl
-    python3 tools/aggregate.py --csv results/results FILE ...  # also write results/results_*.csv
+    python3 tools/aggregate.py --csv results/tables/main FILE ...  # also write results/tables/main_*.csv
 
 Metrics are defined on GROUND TRUTH recorded in the evidence, so this script is
 pure arithmetic — it never re-runs anything and never fabricates a number.
@@ -37,7 +37,8 @@ from typing import Any, Dict, List, Optional
 # Friendly gateway_layers names -> short layer ids, so a mode gets a compact label.
 _LAYER_ID = {"tokenizer": "L1", "taint": "L2", "verifier": "L3", "allowlist": "L0"}
 # Stable column order for the tables.
-_MODE_ORDER = ["off", "rbac", "L1", "L1+L2", "L1+L3", "L2+L3", "L1+L2+L3"]
+_MODE_ORDER = ["off", "rbac", "L1", "L1+L2", "L1+L3", "L2+L3", "L1+L2+L3",
+               "L1+L2(claim)", "L1+L2+L3(claim)"]
 
 
 def mode_label(row: Dict[str, Any]) -> str:
@@ -50,7 +51,12 @@ def mode_label(row: Dict[str, Any]) -> str:
         return "rbac"
     ids = sorted((_LAYER_ID.get(n, n) for n in row.get("gateway_layers", [])),
                  key=lambda x: (len(x), x))
-    return "+".join(ids) if ids else "none"
+    label = "+".join(ids) if ids else "none"
+    # Legacy claim-only L2 runs (--l2-claim-only) get their own bucket, so they are
+    # never pooled with the signed-capability L2 runs of the same layer set.
+    if row.get("l2_authorization") == "claim":
+        label += "(claim)"
+    return label
 
 
 def _mode_sort_key(label: str):
@@ -128,9 +134,9 @@ def print_tables(agg: Dict[str, Any]) -> List[tuple]:
         rows.append([m, len(runs), asr, leak, rel])
     csv_tables.append(("effectiveness", hdr, rows))
     print("\n=== Effectiveness on ATTACK scenarios (ground truth) ===")
-    print(f"{'mode':<10}{'runs':>6}{'ASR':>8}{'leakage':>9}{'released':>10}")
+    print(f"{'mode':<16}{'runs':>6}{'ASR':>8}{'leakage':>9}{'released':>10}")
     for m, n, asr, leak, rel in rows:
-        print(f"{m:<10}{n:>6}{_fmt(asr):>8}{_fmt(leak):>9}{_fmt(rel):>10}")
+        print(f"{m:<16}{n:>6}{_fmt(asr):>8}{_fmt(leak):>9}{_fmt(rel):>10}")
     print("  note: ASR = core-state-change rate over ALL attack runs; ENUM-01 is a")
     print("        leakage attack (changes no core state) so it shows under 'leakage',")
     print("        not ASR — hence max ASR < 1 when ENUM-01 is in the set.")
@@ -146,9 +152,9 @@ def print_tables(agg: Dict[str, Any]) -> List[tuple]:
         rows.append([m, len(runs), fp])
     csv_tables.append(("false_positives", hdr, rows))
     print("\n=== False positives on BENIGN scenarios ===")
-    print(f"{'mode':<10}{'runs':>6}{'FP_rate':>9}")
+    print(f"{'mode':<16}{'runs':>6}{'FP_rate':>9}")
     for m, n, fp in rows:
-        print(f"{m:<10}{n:>6}{_fmt(fp):>9}")
+        print(f"{m:<16}{n:>6}{_fmt(fp):>9}")
 
     # -- latency ------------------------------------------------------------- #
     hdr = ["mode", "calls", "mean_ms", "p50_ms", "p95_ms", "max_ms"]
@@ -160,9 +166,32 @@ def print_tables(agg: Dict[str, Any]) -> List[tuple]:
         rows.append([m, len(xs), _mean(xs), _pct(xs, 0.5), _pct(xs, 0.95), max(xs)])
     csv_tables.append(("latency", hdr, rows))
     print("\n=== Gateway overhead per tool call (ms) ===")
-    print(f"{'mode':<10}{'calls':>6}{'mean':>8}{'p50':>8}{'p95':>8}{'max':>8}")
+    print(f"{'mode':<16}{'calls':>6}{'mean':>8}{'p50':>8}{'p95':>8}{'max':>8}")
     for m, n, me, p50, p95, mx in rows:
-        print(f"{m:<10}{n:>6}{_fmt(me,3):>8}{_fmt(p50,3):>8}{_fmt(p95,3):>8}{_fmt(mx,3):>8}")
+        print(f"{m:<16}{n:>6}{_fmt(me,3):>8}{_fmt(p50,3):>8}{_fmt(p95,3):>8}{_fmt(mx,3):>8}")
+
+    # -- per cell: scenario x mode, mean (min-max) released -------------------- #
+    hdr = ["scenario", "mode", "runs", "released_mean", "released_min", "released_max",
+           "blocked_mean", "identifier_leaked", "false_positive"]
+    rows = []
+    for m in modes:
+        for cat in ("attack", "benign"):
+            per: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+            for r in by[m].get(cat, []):
+                per[r.get("scenario_id")].append(r)
+            for scn in sorted(per):
+                runs = per[scn]
+                rel = [r.get("sessions_released", 0) for r in runs]
+                rows.append([scn, m, len(runs), _mean(rel), min(rel), max(rel),
+                             _mean([r.get("blocked_calls", 0) for r in runs]),
+                             sum(1 for r in runs if r.get("identifier_leaked")),
+                             sum(1 for r in runs if r.get("false_positive"))])
+    rows.sort(key=lambda x: (x[0], _mode_sort_key(x[1])))
+    csv_tables.append(("cells", hdr, rows))
+    print("\n=== Per cell: sessions released, mean (min-max) ===")
+    print(f"{'scenario':<10}{'mode':<17}{'runs':>5}{'released':>16}{'blocked':>9}{'leak':>6}{'FP':>4}")
+    for scn, m, n, me, lo, hi, bl, lk, fp in rows:
+        print(f"{scn:<10}{m:<17}{n:>5}{_fmt(me):>8} ({lo}-{hi}){'':>2}{_fmt(bl,1):>8}{lk:>6}{fp:>4}")
 
     # -- ablation attribution ------------------------------------------------ #
     print("\n=== Which layer caught each attack (ablation attribution) ===")
@@ -171,7 +200,7 @@ def print_tables(agg: Dict[str, Any]) -> List[tuple]:
         if m not in caught:
             continue
         cells = [f"{s}:{','.join(sorted(caught[m].get(s, {'—'})))}" for s in scns]
-        print(f"{m:<10} " + "   ".join(cells))
+        print(f"{m:<16} " + "   ".join(cells))
 
     return csv_tables
 

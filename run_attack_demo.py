@@ -324,6 +324,12 @@ def main() -> None:
         help="Ablation: comma list of layers to keep ON, e.g. 'L1,L2' or 'none'. "
              "Overrides config gateway.layers (only with the gateway on).",
     )
+    parser.add_argument(
+        "--l2-claim-only",
+        action="store_true",
+        help="Run L2 as the legacy claim-only check (verify_authorization: false) for this run "
+             "only, without editing config.yaml. Recorded as l2_authorization='claim'.",
+    )
     args = parser.parse_args()
     scenario_meta = scenarios[args.scenario]
 
@@ -331,6 +337,11 @@ def main() -> None:
     cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f)
+    if args.l2_claim_only:
+        for tool in ((cfg.get("gateway") or {}).get("policy") or {}).get("tools", {}).values():
+            for entry in (tool or {}).get("checks", []):
+                if isinstance(entry, dict) and isinstance(entry.get("provenance"), dict):
+                    entry["provenance"]["verify_authorization"] = False
 
     setup_logging(cfg.get("demo", {}).get("log_level", "INFO"))
 
@@ -480,6 +491,9 @@ def main() -> None:
                 "arguments": c.arguments,
                 "result_status": c.result.get("status"),
                 "verified": c.result.get("verified"),
+                # release calls only: the SMF's answer and the post-release probe statuses
+                "release_http_status": (c.result.get("release_api") or {}).get("http_status"),
+                "post_probe": c.result.get("post_probe"),
                 "is_dangerous": c.is_dangerous(),
                 "changed_core_state": c.changed_core_state(),
                 "blocked_by": ({"layer": c.result.get("layer"), "check": c.result.get("check"),

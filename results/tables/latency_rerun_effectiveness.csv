@@ -1,0 +1,3 @@
+mode,attack_runs,ASR,leakage,avg_released
+L1+L3,10,1.0,0.0,3.0
+L1+L2+L3(claim),5,1.0,0.0,3.0

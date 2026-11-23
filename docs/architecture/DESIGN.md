@@ -84,12 +84,18 @@ L3 currently enforces one procedure live, **PDU-session release**
 (`trigger_pdu_session_release`), with two checks on every caller:
 
 - **FSM / ordering:** an already-`RELEASED` session cannot be released again, which
-  is a hard block (TS 23.502 §4.3.4).
-- **Rate / volume:** at most `max` releases per sliding window, which caps bulk teardown.
+  is a hard block (TS 23.502 §4.3.4). Measured live, a second release is harmless on
+  free5GC (the SMF answers HTTP 404), so for release this shows the mechanism rather
+  than preventing damage; its value is in procedures where a wrong order does harm.
+- **Rate / volume:** at most `max` releases per sliding window (3 per 60 s), which caps
+  bulk teardown. The value is an operator-tunable parameter, not derived from a standard.
+  Its cost is measured live: an authorized bulk drain (BENIGN-05) is blocked after 3
+  releases, because rate cannot tell legitimate bulk from malicious bulk.
 
 State is learned from results already crossing the gateway (`query_subscriber_session`
 → `ACTIVE`, a confirmed release → `RELEASED`). `core_precheck` adds one
-gateway-initiated core lookup on high-risk calls. The offline tests also run the same engine on a
+gateway-initiated core lookup on high-risk calls (three WebConsole REST calls, median
+13 ms live). The offline tests also run the same engine on a
 second 5G procedure (registration / deregistration) and on a non-5G one.
 
 ## Roadmap (future work)
@@ -102,7 +108,9 @@ second 5G procedure (registration / deregistration) and on a non-5G one.
    capability replays by the nonce use count; an idempotency key per release
    request would cover replays across gateway restarts.
 4. **Finer policy:** per-tenant / per-slice rate limits and adaptive thresholds
-   (a learned "normal" rate) instead of one global cap.
+   (a learned "normal" rate) instead of one global cap, and a path for legitimate bulk
+   work, e.g. a rate check that honors the use budget of a signed capability.
+   Cumulative budgets would also cover slow drip.
 5. **State reconciliation:** periodically reconcile the gateway FSM with real core
    state, so it does not drift when a session is released by another path.
 6. **Narrower capabilities (signed capabilities are done):** capabilities are
@@ -112,6 +120,8 @@ second 5G procedure (registration / deregistration) and on a non-5G one.
    would let them survive a gateway restart or span several gateway instances; and
    the operator path that requests them should itself be authenticated (in the
    harness it is simply trusted).
-7. **Real LLM agent:** replace the scripted worst-case agent with a real model
+7. **Direct precheck:** query the AMF OAM directly instead of through the free5GC
+   WebConsole, which leaks per request (see [RESULTS.md §4](../evaluation/RESULTS.md)).
+8. **Real LLM agent:** replace the scripted worst-case agent with a real model
    and measure baseline ASR (not implemented). The advisor ruled this
    optional for the course on 2026-11-18.

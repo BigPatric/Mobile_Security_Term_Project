@@ -70,11 +70,16 @@ Live on free5GC + UERANSIM (nine UEs, each run checked against the SMF's real st
 
 - **RBAC is no better than no defense**: every malicious call is one the agent is allowed to make.
 - **L1** cuts identifier leakage from 100% to 0%.
-- **L2** blocks the plain injected DoS. In the original 130-run matrix L2 accepted any authorization
-  string, so a forged one got past it (*taint laundering*) and **L3** capped that attack at its rate
-  budget (3 of 9 sessions). L2 now requires a capability the gateway signed itself, so the forged
-  ticket is rejected: in the live rerun DOS-02 releases 0 sessions under L1+L2 and the full gateway.
-- **No false positives** on the benign tasks, with a median overhead of about 0.04 ms per call.
+- **L2** requires a capability the gateway signed itself, so both the plain injected DoS and the one
+  carrying a forged change ticket release **0 of 9 sessions** under L1+L2 and the full gateway
+  (8.9 without a gateway). With the legacy claim-only L2 the forged ticket gets past it
+  (*taint laundering*), and **L3** caps that attack at its rate budget (3 of 9 sessions).
+- **No false positives** on the four single-release benign tasks. The rate cap does block a legitimate
+  bulk drain after 3 releases (BENIGN-05), the known trade-off of a rate limit.
+- Overhead: a median of about 0.04 ms per ordinary call; a forwarded release adds a median of 13 ms
+  (9–27 ms) for L3's core precheck.
+- 150 runs on the final code plus a 30-run latency rerun; every one of the 498 counted releases is
+  confirmed by an SMF 204 and a probe 404. A second release of the same session gets HTTP 404 from the SMF.
 
 Full numbers are in the [final report](docs/final_report/final_report.pdf) and
 [RESULTS.md](docs/evaluation/RESULTS.md). Offline experiments show that new procedures
@@ -93,7 +98,9 @@ tool-call boundary**, not in the model. Each layer closes a different hole:
 - **L3** protects procedure integrity, and it is the one layer that still holds
   when a genuine authorization is stolen or misused by an insider.
 
-The gateway beats RBAC, causes no false positives on the benign tasks and adds negligible latency.
+The gateway beats RBAC, causes no false positives on single-release benign tasks, and adds under 1 ms
+to ordinary calls; a forwarded release pays one core round trip. Its rate cap also blocks legitimate
+bulk maintenance past 3 releases.
 
 **Limits we keep in view:** L3's rate check *bounds* bulk abuse rather than
 eliminating it (out-of-order operations, such as a double release, are blocked
@@ -112,7 +119,8 @@ python3 tests/test_e2e_scenarios.py        # offline: no core needed
 
 # live (testbed up — see docs/guides/RUNNING.md)
 python3 run_attack_demo.py --scenario DOS-02 --gateway off   # sessions really released
-python3 run_attack_demo.py --scenario DOS-02 --gateway on    # L2 fooled, L3 caps it
+python3 run_attack_demo.py --scenario DOS-02 --gateway on    # forged ticket rejected by L2, 0 released
+python3 run_attack_demo.py --scenario DOS-02 --gateway on --l2-claim-only   # legacy L2 fooled, L3 caps at 3
 ```
 
 ## Repository structure
@@ -126,7 +134,7 @@ Mobile_Security_Term_Project/
 ├── tests/              # offline unit / scenario / adversarial tests
 ├── tools/              # experiment runners, sweeps, result aggregation
 ├── docs/               # architecture · guides · evaluation · proposal · final report
-├── results/            # aggregated live results (CSV) behind the report's tables
+├── results/            # evidence/ (raw JSONL) · tables/ (CSV) · archive/ (superseded); see results/README.md
 ├── free5gc/ UERANSIM/  # vendored testbed (called, never modified)
 ├── run_attack_demo.py  # one live run: --scenario, --gateway on/off/rbac, --layers
 ├── config.yaml         # core endpoints + gateway policy + layer toggles
@@ -145,12 +153,14 @@ Full index: [docs/README.md](docs/README.md).
 | | [END_TO_END_FLOW.md](docs/architecture/END_TO_END_FLOW.md) | Full request lifecycle and attack walkthrough, function by function |
 | | [REPOSITORY_LAYOUT.md](docs/architecture/REPOSITORY_LAYOUT.md) | What every directory and file is for |
 | Guides | [RUNNING.md](docs/guides/RUNNING.md) | Testbed bring-up, unit tests, live demo, full experiment matrix, lab notes |
-| Evaluation | [RESULTS.md](docs/evaluation/RESULTS.md) | Live result tables: ASR, leakage, FP, latency, ablation |
+| Evaluation | [RESULTS.md](docs/evaluation/RESULTS.md) | Live result tables: ASR, leakage, FP, latency, ablation, double release |
+| | [results/README.md](results/README.md) | What each evidence file and CSV contains, and how to regenerate them |
 | | [EVAL_CURVE.md](docs/evaluation/EVAL_CURVE.md) | ASR / FP trade-off curve on synthetic traces |
 | | [ADVERSARIAL_BOUNDARY.md](docs/evaluation/ADVERSARIAL_BOUNDARY.md) | Adaptive attackers: what is blocked and what is not |
 | | [GENERALITY_PROOF.md](docs/evaluation/GENERALITY_PROOF.md) | Why the gateway is general rather than written for the three attacks |
 | Report | [final_report.pdf](docs/final_report/final_report.pdf) | Final project report (LaTeX source in [latex/](docs/final_report/latex/)) |
 | Proposal | [112550018_proposal.pdf](docs/proposal/112550018_proposal.pdf) | Original project proposal |
+| | [progress_report.pdf](docs/proposal/progress_report.pdf) | Mid-term progress report |
 
 ## References
 - Greshake et al. (2023), *Indirect Prompt Injection* — arXiv:2302.12173

@@ -24,12 +24,14 @@
 #
 #   Subset of the matrix into its own evidence file (space-separated lists):
 #     sudo REPEATS=5 ATTACKS="ENUM-01 DOS-02" BENIGN="BENIGN-02 BENIGN-04" \
-#          EVIDENCE=results/attack_evidence_signed.jsonl ./tools/run_live_matrix.sh
+#          EVIDENCE=results/archive/attack_evidence_signed.jsonl ./tools/run_live_matrix.sh
 #
 #   Explicit cell list (overrides ATTACKS/BENIGN): CELLS="SCENARIO|args;SCENARIO|args;..."
 #   PRESET=signed — only the cells the HMAC-token + signed-capability change can affect
-#   (40 runs at REPEATS=5), into results/attack_evidence_signed.jsonl:
+#   (40 runs at REPEATS=5; superseded), into results/archive/attack_evidence_signed.jsonl:
 #     sudo REPEATS=5 PRESET=signed ./tools/run_live_matrix.sh
+#   PRESET=final — everything on the final code in one go (see PRESET_FINAL below):
+#     sudo N_UES=9 REPEATS=5 PRESET=final ./tools/run_live_matrix.sh --fresh
 #
 # Prereqs you own (the script does NOT change them):
 #   - free5GC built & provisioned with >= N subscribers (imsi-20893000000000{1..N})
@@ -84,11 +86,43 @@ PRESET_SIGNED="ENUM-01|--gateway on --layers L1;ENUM-01|--gateway on --layers L1
 ENUM-01|--gateway on --layers L1,L3;ENUM-01|--gateway on;\
 DOS-02|--gateway on --layers L1,L2;DOS-02|--gateway on;\
 BENIGN-02|--gateway on;BENIGN-04|--gateway on"
-if [ "${PRESET:-}" = "signed" ]; then
+# PRESET=final — the whole matrix on the final code in ONE invocation (28 cells,
+# 140 runs at REPEATS=5), into results/evidence/attack_evidence_final.jsonl:
+#   - every cell under the default signed L2, plus the two DOS-02 cells under the
+#     legacy claim-only L2 (--l2-claim-only) for the before/after comparison;
+#   - cells that leave the core untouched (reads, or every release blocked) come
+#     first in each repeat, so they share one core bring-up (REUSE_CORE);
+#   - afterwards, on a fresh core, tools/double_release.py measures what a second
+#     release of the same session does (results/evidence/double_release.jsonl).
+PRESET_FINAL="ENUM-01|--gateway off;ENUM-01|--gateway rbac;ENUM-01|--gateway on --layers L1;\
+ENUM-01|--gateway on --layers L1,L2;ENUM-01|--gateway on --layers L1,L3;ENUM-01|--gateway on;\
+BENIGN-01|--gateway on;BENIGN-01|--gateway rbac;BENIGN-03|--gateway on;BENIGN-03|--gateway rbac;\
+DOS-01|--gateway on --layers L1,L2;DOS-01|--gateway on;\
+DOS-02|--gateway on --layers L1,L2;DOS-02|--gateway on;\
+DOS-01|--gateway off;DOS-02|--gateway off;DOS-01|--gateway rbac;DOS-02|--gateway rbac;\
+DOS-01|--gateway on --layers L1;DOS-02|--gateway on --layers L1;\
+DOS-01|--gateway on --layers L1,L3;DOS-02|--gateway on --layers L1,L3;\
+DOS-02|--gateway on --layers L1,L2 --l2-claim-only;DOS-02|--gateway on --l2-claim-only;\
+BENIGN-02|--gateway on;BENIGN-02|--gateway rbac;BENIGN-04|--gateway on;BENIGN-04|--gateway rbac"
+# PRESET=latency — only the cells whose releases pass L3's core precheck (6 cells, 30 runs
+# at REPEATS=5), into results/evidence/attack_evidence_latency.jsonl, each on a fresh core AND a
+# fresh WebConsole. Blocking results do not depend on WebConsole speed, so nothing else
+# needs a rerun.
+PRESET_LATENCY="DOS-01|--gateway on --layers L1,L3;DOS-02|--gateway on --layers L1,L3;\
+DOS-02|--gateway on --l2-claim-only;\
+BENIGN-02|--gateway on;BENIGN-04|--gateway on;BENIGN-05|--gateway on"
+if [ "${PRESET:-}" = "latency" ]; then
+  CELLS="${CELLS:-$PRESET_LATENCY}"
+  EVIDENCE="${EVIDENCE:-$ROOT/results/evidence/attack_evidence_latency.jsonl}"
+elif [ "${PRESET:-}" = "signed" ]; then
   CELLS="${CELLS:-$PRESET_SIGNED}"
-  EVIDENCE="${EVIDENCE:-$ROOT/results/attack_evidence_signed.jsonl}"
+  EVIDENCE="${EVIDENCE:-$ROOT/results/archive/attack_evidence_signed.jsonl}"
+elif [ "${PRESET:-}" = "final" ]; then
+  CELLS="${CELLS:-$PRESET_FINAL}"
+  EVIDENCE="${EVIDENCE:-$ROOT/results/evidence/attack_evidence_final.jsonl}"
+  DOUBLE_RELEASE="${DOUBLE_RELEASE:-1}"
 elif [ -n "${PRESET:-}" ]; then
-  echo "unknown PRESET=$PRESET (known: signed)"; exit 1
+  echo "unknown PRESET=$PRESET (known: signed, final, latency)"; exit 1
 fi
 EVIDENCE="${EVIDENCE:-$ROOT/attack_evidence.jsonl}"
 REUSE_CORE="${REUSE_CORE:-1}"
@@ -115,6 +149,19 @@ teardown() {
   # in case run.sh itself is still around
   [ -f "$FREE5GC/run.pid" ] && kill "$(cat "$FREE5GC/run.pid")" >/dev/null 2>&1
   killall -9 run.sh >/dev/null 2>&1
+  # WebConsole is not part of run.sh / force_kill.sh, so it would otherwise live across
+  # every bring-up. free5GC's WebConsole appends the NRF's AMF/SMF profiles to an
+  # in-memory list on EVERY request and never clears it, so a long-lived instance gets
+  # slower with the total number of requests served (this is what made the L3 core
+  # precheck drift from ~20 ms to ~200 ms). Restart it with the core.
+  killall webconsole >/dev/null 2>&1
+  sleep 1
+  killall -9 webconsole >/dev/null 2>&1
+  # NFs killed with -9 never deregister, so the NRF's urilist keeps one stale entry per
+  # NF per bring-up. Clear it while the NRF is down (re-created on registration).
+  if [ "${CLEAN_NRF:-1}" = 1 ] && command -v mongo >/dev/null 2>&1; then
+    mongo --quiet free5gc --eval 'db.urilist.deleteMany({})' >/dev/null 2>&1
+  fi
   sleep 2
 }
 
@@ -148,7 +195,9 @@ bringup() {
   for ip in $CORE_SBI; do                          # all NFs listening, not just the SMF
     wait_port "$ip" 8000 30 || { y "  NF SBI $ip:8000 did not come up — see $LOGDIR/free5gc.log"; return 1; }
   done
-  wait_port "$WEBCONSOLE_HOST" "$WEBCONSOLE_PORT" 30 || y "  WebConsole not up yet (continuing)"
+  # fresh WebConsole for every core (see teardown)
+  ( cd "$FREE5GC/webconsole" && ./bin/webconsole -c ../config/webuicfg.yaml > "$LOGDIR/webconsole.log" 2>&1 ) &
+  wait_port "$WEBCONSOLE_HOST" "$WEBCONSOLE_PORT" 30 || y "  WebConsole not up yet (continuing) — see $LOGDIR/webconsole.log"
   sleep "$NRF_GRACE"                               # let the NFs finish registering with the NRF
   c "  [2/3] starting gNB…"
   : > "$LOGDIR/gnb.log"
@@ -189,6 +238,8 @@ main() {
   fi
 
   trap 'echo; y "interrupted — tearing down"; teardown; exit 130' INT TERM
+  c "  killing any running core / gNB / UEs / WebConsole first…"
+  teardown
 
   # build the work list: explicit CELLS, else attacks x modes, then benign x benign-modes
   local -a WORK=()
@@ -236,6 +287,18 @@ main() {
       fi
     done
   done
+
+  if [ "${DOUBLE_RELEASE:-0}" = 1 ]; then
+    c "=== double release (Sec. V-B): fresh core, no gateway ==="
+    teardown
+    if bringup; then
+      "$PYTHON" "$ROOT/tools/double_release.py" --out "$ROOT/results/evidence/double_release.jsonl" \
+        && g "  ✓ double release recorded -> results/evidence/double_release.jsonl" \
+        || y "  ✗ double release did not complete (see output above)"
+    else
+      y "  bring-up failed — double release skipped"
+    fi
+  fi
 
   teardown
   trap - INT TERM

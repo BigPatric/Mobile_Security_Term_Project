@@ -274,20 +274,24 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int, **_gw_meta
     smf_released = False  # SMF SM context gone — authoritative core-side signal
     cp_released = False   # AMF no longer registers it (usually stale on direct release)
     dp_released = False   # UE tunnel removed (stale unless the UE was signalled)
+    # Every probe's HTTP status goes into the evidence ("unreachable" if no answer),
+    # so a "released" verdict can be checked against a real 404 afterwards.
+    smf_status: list = []
+    amf_status: list = []
     for _ in range(15):   # up to ~12s
         time.sleep(0.8)
         if not smf_released:
             try:
-                if cs.smf_context_gone(sm_context_ref) is True:   # 404 only, never on error
+                if cs.smf_context_gone(sm_context_ref, statuses=smf_status) is True:  # 404 only
                     smf_released = True
             except cs.CoreUnavailable:
-                pass
+                smf_status.append("unreachable")
         if not cp_released:
             try:
-                if cs.amf_session_gone(ns, psi) is True:          # never on error
+                if cs.amf_session_gone(ns, psi, statuses=amf_status) is True:     # never on error
                     cp_released = True
             except cs.CoreUnavailable:
-                pass
+                amf_status.append("unreachable")
         if not dp_released and pre_iface and cs._iface_for_ip(pre_ip) is None:
             dp_released = True
         if smf_released or cp_released or dp_released:
@@ -296,6 +300,9 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int, **_gw_meta
     # --- post-condition verification (ground truth) ---
     post_dp = cs.data_plane_probe(pre_ip)
     verified = smf_released or cp_released or dp_released
+    post_probe = {"smf_status": smf_status, "amf_status": amf_status,
+                  "smf_released": smf_released, "amf_released": cp_released,
+                  "tunnel_removed": dp_released}
 
     if not verified:
         logger.error("[TOOL] SMF accepted the release but the SM context is still present.", )
@@ -305,6 +312,7 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int, **_gw_meta
             "pre_state": "ACTIVE", "post_state": "ACTIVE",
             "detail": "SMF returned 2xx but its SM context is still resolvable — release not confirmed.",
             "release_api": release_api,
+            "post_probe": post_probe,
         }
 
     confirmed_by = []
@@ -331,6 +339,7 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int, **_gw_meta
         "sm_context_ref": sm_context_ref,
         "release_api": release_api,
         "confirmed_by": confirmed_by,
+        "post_probe": post_probe,
         "ue_notified": ue_notified,
         "note": note,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
