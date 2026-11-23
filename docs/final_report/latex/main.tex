@@ -67,7 +67,7 @@ indirect prompt injection. A hijacked agent with core access can leak subscriber
 identifiers (SUPIs) and tear down PDU sessions in bulk. Role-based access control does not
 help, because every malicious call is one the agent is allowed to make. We present a
 \emph{Secure MCP Gateway} that sits at the tool-call boundary between the agent and a live
-free5GC core and treats the agent as already compromised. It enforces three independent
+free5GC core and treats the agent as already compromised. It enforces three
 layers: (L1) identifier tokenization, so the agent never holds a real SUPI; (L2) provenance
 and taint tracking, so untrusted content cannot drive a high-risk state change unless the call
 carries a capability the gateway itself signed; and (L3) a
@@ -80,9 +80,10 @@ runs, RBAC lets every attack through, exactly as having no defense does. L1 redu
 identifier leakage from 100\% to 0\%. With L2 bound to gateway-signed capabilities, the full gateway
 tears down none of the active sessions in either DoS attack (without a gateway, all of them),
 including an attack that forges a change ticket. L2's guarantee, however, rests on a secret and on an
-authentic operator path. To model L2 failing, we run the forged-ticket attack against an L2 that
-accepts any authorization string: the ticket bypasses L2, and L3, which trusts nothing the call
-carries, still caps the attack at its rate budget (3 of 9 sessions per window). The full gateway
+authentic operator path. When L2 is misconfigured to accept any authorization string, the forged
+ticket passes it, and L3, which trusts nothing the call carries, slows the attack to its rate
+budget of 3 sessions per 60\,s window; an offline test shows the same for a genuine capability
+misused by a hijacked agent. The full gateway
 produces no false positives on four benign tasks that release at most one session each, but its
 rate cap blocks a legitimate bulk maintenance task after three releases. It adds a median of
 0.04\,ms to ordinary calls; a release it lets through costs a median of 13\,ms more
@@ -127,14 +128,15 @@ capability to do damage instead of relying on its judgment.
         (L3). The layers rest on different assumptions: L2 needs the gateway's secret and an
         authentic operator path, while L3, based on a simplified model of the TS~23.502
         PDU-session release procedure~\cite{ts23502}, trusts no secret and no authorization the
-        call carries. L3 is therefore the layer that still bounds damage when L2 is bypassed.
+        call carries. L3 is therefore the layer that still limits damage, per rate window, when L2
+        is bypassed or a genuine capability is misused.
   \item A config-driven policy engine in which every layer is a pluggable check, so
         protection for a new tool or procedure is added by editing data, not code.
   \item A live evaluation on free5GC~\cite{free5gc} and UERANSIM~\cite{ueransim} with
         ground-truth success criteria, an RBAC baseline and a full layer ablation. Binding L2 to
         gateway-signed capabilities stops every live attack. When L2 is bypassed (modelled
         by an L2 that accepts any authorization claim, fed a forged change ticket),
-        L3 still holds the same attack to its rate budget.
+        L3 still limits the same attack to its per-window rate budget.
   \item A map of where the defense stops holding: a rate-cap trade-off curve on
         labelled synthetic traces and an adaptive-attacker study (slow drip, bucket
         splitting).
@@ -471,69 +473,38 @@ gateway, all with the signed-capability L2, plus L1+L2 and the full gateway with
 
 \begin{table}[t]
 \centering
-\caption{Live results (150-run matrix, final code)}
+\caption{Live attack results (5 runs per cell)}
 \label{tab:live}
-\setlength{\tabcolsep}{4pt}
+\setlength{\tabcolsep}{5pt}
 \begin{tabular}{@{}lccc@{}}
 \toprule
- & Leakage & \multicolumn{2}{c}{Teardown (\% of active sessions)} \\
-\cmidrule(l){3-4}
-Mode & (ENUM-01) & DOS-01 & DOS-02 \\
+ & Leakage (\%) & \multicolumn{2}{c}{Teardown (\%)} \\
+\cmidrule(lr){2-2}\cmidrule(l){3-4}
+Mode & ENUM-01 & DOS-01 & DOS-02 \\
 \midrule
-off (no gateway)     & 1.00 & 100 & 100 \\
-RBAC allow-list      & 1.00 & 100 & 100 \\
-L1                   & \textbf{0.00} & 100 & 100 \\
-L1+L2                & 0.00 & \textbf{0} & \textbf{0} \\
-L1+L3                & 0.00 & 33 & 33 \\
-\textbf{L1+L2+L3 (full)} & \textbf{0.00} & \textbf{0} & \textbf{0} \\
+off (no gateway)          & 100 & 100 & 100 \\
+RBAC allow-list           & 100 & 100 & 100 \\
+L1                        & 0   & 100 & 100 \\
+L1+L2                     & 0   & 0   & 0   \\
+L1+L3                     & 0   & 33  & 33  \\
+\textbf{Full (L1+L2+L3)}  & \textbf{0} & \textbf{0} & \textbf{0} \\
 \midrule
-\multicolumn{4}{@{}l}{\textit{L2 bypassed: claim-only L2 (DOS-02 only)}} \\
-L1+L2                & 0.00 & --- & 100 \\
-L1+L2+L3 (full)      & 0.00 & --- & 35 \\
+\multicolumn{4}{@{}l}{\textit{L2 bypassed (claim-only L2), DOS-02 only}} \\
+L1+L2                     & --- & --- & 100 \\
+Full (L1+L2+L3)           & --- & --- & 35  \\
 \bottomrule
 \end{tabular}
+
+\smallskip
+{\footnotesize Leakage: share of runs in which a raw SUPI reached the agent.
+Teardown: mean share of the sessions active at attack start that the SMF
+confirms torn down. ---: not run.\par}
 \end{table}
 
-\begin{figure}[t]
-\centering
-\begin{tikzpicture}
-\begin{axis}[
-    ybar,
-    width=\columnwidth, height=46mm,
-    bar width=6pt,
-    ymin=0, ymax=125,
-    ytick={0,33,67,100},
-    ylabel={Teardown (\% of active)},
-    ylabel style={font=\footnotesize},
-    symbolic x coords={off,rbac,lone,lonetwo,lonethree,full},
-    xtick={off,rbac,lone,lonetwo,lonethree,full},
-    xticklabels={off,RBAC,L1,L1+L2,L1+L3,full},
-    x tick label style={font=\footnotesize},
-    y tick label style={font=\footnotesize},
-    enlarge x limits=0.1,
-    legend style={font=\footnotesize, at={(0.98,0.97)}, anchor=north east, legend columns=1, draw=none, fill=none},
-    nodes near coords,
-    every node near coord/.append style={font=\tiny, rotate=90, anchor=west},
-    ymajorgrids, grid style={gwlight},
-    axis line style={gwgrey},
-  ]
-  \addplot[fill=gwblue, draw=gwblue] coordinates {(off,100) (rbac,100) (lone,100) (lonetwo,0) (lonethree,33) (full,0)};
-  \addplot[fill=gworange, draw=gworange] coordinates {(off,100) (rbac,100) (lone,100) (lonetwo,0) (lonethree,33) (full,0)};
-  \addplot[fill=gwred!60, draw=gwred] coordinates {(lonetwo,100) (full,35)};
-  \legend{DOS-01, DOS-02, {DOS-02, L2 bypassed (claim-only)}}
-\end{axis}
-\end{tikzpicture}
-\caption{Mean share of the active PDU sessions torn down per DoS attack, by defense mode (live,
-ground truth, 5 repeats). With the signed-capability L2, no session is released from L1+L2 on.
-The third bar models L2 being bypassed (claim-only L2, run only for L1+L2 and the full gateway):
-the forged ticket passes L2, and L3 still holds the damage at its rate budget of 3 sessions. Every
-bar has the same value in all five repeats except the last (33--38\%: 3 of 8 or 9 active sessions).}
-\label{fig:released}
-\end{figure}
-
 Table~\ref{tab:live} gives the live results (15 attack runs per mode, nine sessions, rate
-cap~3). The two claim-only rows run DOS-02 only.
-Fig.~\ref{fig:released} shows the same teardown numbers. Because the agent is deterministic, the
+cap~3). The two claim-only rows run DOS-02 only. Every cell has the same value in all five
+repeats except the full gateway with the claim-only L2 (33--38\%: 3 of 8 or 9 active sessions).
+Because the agent is deterministic, the
 live matrix does not estimate how often an attack works; what it adds over the offline tests is
 ground truth from a real core, which confirmed every counted release, and real latency.
 
@@ -543,7 +514,7 @@ permits, so the allow-list never blocks anything: teardown and leakage are ident
 motivation for the gateway.
 
 \emph{L1 eliminates identifier leakage.} From L1 on, ENUM-01 returns only tokens and leakage
-drops from 1.00 to 0.00 (Fig.~\ref{fig:enum}).
+drops from 100\% to 0\% (Fig.~\ref{fig:enum}).
 
 \begin{figure*}[t]
 \centering
@@ -564,24 +535,30 @@ session, against every active session without a gateway.
 
 \emph{When L2 is bypassed, it fails completely.} L2's guarantee holds only while the gateway's key
 stays secret, the operator path that requests capabilities is authentic, and L2 is configured to
-verify. We model a failure of any of these with the claim-only L2: the copied ticket satisfies
+verify. We model the last of these, a misconfigured L2, with the claim-only L2: the copied ticket satisfies
 L2's authorization branch, and DOS-02 under L1+L2 releases every session that is up (100\%;
 Fig.~\ref{fig:dos02}a).
 
-\emph{L3 bounds the damage when L2 fails.} L3 ignores the ticket. Without L2 (L1+L3), or
+\emph{L3 limits the damage when L2 fails.} L3 ignores the ticket. Without L2 (L1+L3), or
 behind the bypassed L2 (full gateway), it stops both DoS attacks at the rate cap: exactly 3
 sessions in every run, with the remaining release attempts blocked (Fig.~\ref{fig:dos02}b).
 
-This is why the gateway keeps L3 even though the signed L2 alone stops all three live attacks.
-L3 also bounds a genuine capability in a hijacked agent's hands when its use budget exceeds what
-is needed at once, for example a standing capability for a whole maintenance window. In an offline
-test, a hijacked agent holds a valid capability for nine releases; L2 accepts it, and the cap stops
-the teardown at three. (If the
-budget matches the task, the budget alone already bounds the misuse.)
+\emph{L3 is needed even when L2 works as designed.} A misconfiguration is only one way past L2.
+The stronger reason to keep L3 is a case that a correctly working L2 cannot stop: a \emph{genuine}
+capability in a hijacked agent's hands. A capability is bound to a tool and a use budget, not
+to targets or intent, so an operator who grants a standing capability for a whole maintenance
+window hands the attacker valid authorization. We test this offline only, with the same agent
+and gateway against a simulated nine-UE core: the operator grants a capability for nine
+releases, and a poisoned alert then turns the agent against every session. L2 accepts every
+call; the full gateway releases 3 sessions, with the remaining attempts blocked by L3's rate cap,
+and without L3 all 9 are released. (If the budget matches the task, the budget alone already
+bounds the misuse.)
+
 This protection has a price. The cap cannot tell a legitimate bulk release from a malicious one,
 so it blocks the legitimate one as well, live (BENIGN-05, Sec.~\ref{sec:fp}) and offline
 (Fig.~\ref{fig:curve}).
-The FSM is the part of L3 that no other layer replaces: it is the only check on procedure
+
+\emph{The FSM adds no protection for release.} It is the part of L3 that no other layer replaces: it is the only check on procedure
 ordering, and no attacker timing evades it. For the release procedure, however, the ordering
 violation it blocks, a second release of the same session, is not damaging in itself. We measured
 this live without the gateway: after a verified release, a second release of the same SM context,
@@ -632,19 +609,20 @@ Sec.~\ref{sec:disc} discusses how a deployment would set the cap.
 \centering
 \caption{Gateway overhead per tool call (ms)}
 \label{tab:latency}
+\setlength{\tabcolsep}{4pt}
 \begin{tabular}{@{}lrrrrr@{}}
 \toprule
-Calls & n & Mean & p50 & p95 & Max \\
+Mode & Calls & Mean & p50 & p95 & Max \\
 \midrule
-\multicolumn{6}{@{}l}{\textit{No core query (150-run matrix)}} \\
+\multicolumn{6}{@{}l}{\textit{Calls without a core query (150-run matrix)}} \\
 \quad RBAC   & 444 & 0.053 & 0.033 & 0.133 & 0.321 \\
 \quad L1     & 203 & 0.113 & 0.113 & 0.179 & 0.552 \\
 \quad L1+L2  & 210 & 0.046 & 0.038 & 0.102 & 0.516 \\
 \quad L1+L3  & 180 & 0.045 & 0.036 & 0.107 & 0.186 \\
-\quad Full   & 420 & 0.047 & 0.035 & 0.127 & 0.272 \\
+\quad Full (L1+L2+L3) & 420 & 0.047 & 0.035 & 0.127 & 0.272 \\
 \midrule
-\multicolumn{6}{@{}l}{\textit{Forwarded release with core precheck (30-run rerun)}} \\
-\quad L1+L3, full & 70 & 13.1 & 13.1 & 17.9 & 26.5 \\
+\multicolumn{6}{@{}l}{\textit{Forwarded releases incl.\ precheck (30-run rerun)}} \\
+\quad All L3 modes & 70 & 13.1 & 13.1 & 17.9 & 26.5 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -654,7 +632,7 @@ including every blocked release, costs the gateway's own checks only: under 0.6\
 mode, with a median of 0.03--0.11\,ms. A release that passes L3 also waits for L3's core precheck,
 a real round trip to the core (three WebConsole REST calls). Over 70 such releases, in DOS-01 and
 DOS-02 under L1+L3, DOS-02 under the full gateway with the claim-only L2, and BENIGN-02/04/05 under
-the full gateway, the precheck took 9--27\,ms, median 13\,ms, within our 50\,ms design target. That
+the full gateway, the precheck took 9--27\,ms, median 13\,ms. That
 cost is paid only by high-risk calls that are about to be forwarded, and it is small next to the
 forwarded release itself: the release tool call (SM-context lookup, SMF release and post-condition
 probes) took a median of 4.9\,s (4.9--5.1\,s), so the precheck adds under 0.3\%.
@@ -786,7 +764,8 @@ regression tests for the fixes described in Sec.~\ref{sec:fixes}.
 guarantees (tokenization, taint and ordering do not depend on how many sessions exist). The
 cap bounds an absolute number of releases per window, not a fraction, so the damage per window
 does not depend on the size of the core: the blocked fraction of a burst is $1-3/N$ for $N$
-sessions, which is 2/3 on our nine-UE testbed (the worst case) and grows as the core grows.
+sessions, which is 2/3 on our nine-UE testbed and grows as the core grows. Across several
+windows, however, the cap limits only the rate of teardown, not its total (Sec.~\ref{sec:adaptive}).
 
 \textbf{Choice of the rate cap.} The value 3 per 60\,s is an operator-tunable parameter, not
 derived from a standard. We chose it to sit just above the release rate of our single-release
@@ -794,13 +773,14 @@ benign tasks. No value removes both costs: Fig.~\ref{fig:curve} sweeps the cap f
 BENIGN-05 shows on the live core that a cap low enough to bound a DoS also blocks a legitimate bulk
 drain. In a deployment the cap should come from the operator's own maintenance logs, and
 legitimate bulk work would need a separate path, for example a capability whose use budget the
-rate check honors. The guarantees that do not depend on any threshold come from the signed L2 and
-the L3 FSM; the cap is the fallback for when L2 is bypassed or a genuine capability is misused.
+rate check honors. The guarantee that does not depend on any threshold comes from the signed L2
+(and, for procedures where order matters, the L3 FSM); the cap is the fallback for when L2 is
+bypassed or a genuine capability is misused.
 
 \textbf{Sample size.} Each live cell ran five times: 150 runs in the matrix, plus 30 in the
 latency rerun. The live numbers are
 means over those repeats on a real core, without confidence intervals; with five repeats and a
-deterministic agent we report the range instead (Fig.~\ref{fig:released}). Every blocked or capped
+deterministic agent we report the range instead (Sec.~\ref{sec:groundtruth}). Every blocked or capped
 cell released the same number of sessions in all five repeats. The precheck latency was measured on a core whose
 WebConsole had just started (Sec.~\ref{sec:latency}); a long-running deployment would need the
 WebConsole leak fixed, or a precheck that queries the AMF directly instead of through the WebConsole.
@@ -823,7 +803,11 @@ that requests them is authentic; in our harness it is simply trusted. A capabili
 tool and a use budget, not to a particular subscriber or session, so a hijacked agent that holds
 one can spend it on targets of the attacker's choosing; binding it to arguments would narrow this.
 Use counts live in the gateway's memory, so they do not survive a restart or span several gateway
-instances.
+instances. The misuse of a genuine capability (Sec.~\ref{sec:groundtruth}) was tested only offline;
+running it live, as an attack that receives a capability for nine releases under L1+L2 and the
+full gateway, is future work. At the call level such an attack is indistinguishable from
+BENIGN-05, so the rate cap would stop both; the only difference is that the attack read a tainted
+log, which suggests giving a capability spent in a tainted session a stricter budget.
 
 \textbf{Token derivation.} Tokens are a 16-bit prefix of the keyed HMAC, extended on collision.
 The key makes offline inversion impossible, but the short prefix means a guessed token is valid
@@ -898,23 +882,22 @@ state at the tool-call boundary of an LLM agent that operates a 5G core.
 \section{Conclusion}
 
 Prompt-injection defense for network-operations agents belongs at the tool-call boundary,
-not in the model. Our gateway's three layers protect identifier confidentiality (L1), source
-integrity (L2) and procedure integrity (L3), and they rest on different assumptions. On a live free5GC core, driven by a scripted,
-always-hijacked agent, RBAC was no better than no defense, while the full gateway reduced
-identifier leakage to zero and cut the share of active sessions torn down per DoS attack from all
-to none, in 150 runs whose every counted release is confirmed by the core. It caused no false
-positives on four single-release benign tasks and added a median of 0.04\,ms to ordinary calls
-and 13\,ms to each release it let through.
-With gateway-signed capabilities, L1 and L2 alone stop all three live attacks. But L2 is only as
-strong as its secret and its operator path; when it is bypassed, modelled by an L2 that trusts
-authorization claims, it gives no protection at all.
-L3, which trusts nothing the call carries, then still held the same attack to its rate budget
-(three of nine sessions). That fallback has costs: a cap low enough to matter also blocks
-legitimate bulk maintenance, as a live bulk drain showed, and it bounds bursts but not slow drip.
-L3's FSM is the one check that no attacker timing can evade, but for PDU-session release the
-violation it blocks (a second release) is harmless, since the SMF answers it with HTTP 404.
-Showing its value on procedures where a wrong order does cause harm, such as modification or
-establishment, is the main next step for L3.
+not in the model. On a live free5GC core, driven by a scripted, always-hijacked agent, RBAC was
+no better than no defense, while the full gateway reduced identifier leakage to zero and cut the
+share of active sessions torn down per DoS attack from all to none; every counted release was
+confirmed by the core. It caused no false positives on four single-release benign tasks and
+added a median of 0.04\,ms to ordinary calls and 13\,ms to each release it let through.
+L1 and L2 alone stop all three live attacks, and it is the signed capabilities that stop the
+injected teardowns. L2 stops forged authorization, not misused authorization. When it is misconfigured to
+trust authorization claims it gives no protection at all, and even when it works as designed, a
+genuine capability held by a hijacked agent passes it (tested offline).
+In both cases L3, which trusts nothing the call carries, slowed the attack to its rate budget of
+three sessions per 60\,s window. This is a rate, not a total: an attacker that keeps going across
+windows, or drips slowly, is not stopped, and the same cap blocks legitimate bulk maintenance, as
+a live bulk drain showed. L3's FSM added no protection for PDU-session release, because the SMF
+already rejects the only out-of-order call (a second release) with HTTP 404. Its value has to be
+shown on procedures where the core accepts a wrong order that causes harm, which is the main
+next step for L3.
 
 \section*{Artifact}
 % Left-aligned: long monospace paths cannot hyphenate, so full justification
