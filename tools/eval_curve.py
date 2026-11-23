@@ -96,6 +96,9 @@ def evaluate(caps):
         frac = [res[t["id"]][0] / t["n"] for t in dos]
         asr = sum(1 for t in dos if res[t["id"]][0] > ALLOWED_BLAST) / len(dos)
         mean_frac = sum(frac) / len(frac)
+        # bulk only (slow drip is cap-independent, so it would flatten the curve)
+        bulk = [t for t in mal if t["class"] == "attack_forged_auth_bulk"]
+        bulk_frac = sum(res[t["id"]][0] / t["n"] for t in bulk) / len(bulk)
         max_released = max(res[t["id"]][0] for t in dos)
 
         # slow-drip alone (to show it is flat — evades the cap)
@@ -110,7 +113,7 @@ def evaluate(caps):
         # false positives: a benign trace with any legitimate call blocked
         fp = sum(1 for t in ben if res[t["id"]][1] > 0) / len(ben)
 
-        rows.append({"cap": cap, "asr": asr, "mean_frac": mean_frac, "max_released": max_released,
+        rows.append({"cap": cap, "asr": asr, "mean_frac": mean_frac, "bulk_frac": bulk_frac, "max_released": max_released,
                      "drip": f"{drip_released}/{drip_total}", "oos_blocked": oos_blocked_all, "fp": fp})
     return rows
 
@@ -127,10 +130,10 @@ def main():
 
     print("Rate-cap sweep — attack effect vs false positives "
           f"(ALLOWED_BLAST={ALLOWED_BLAST}, window={WINDOW:g}s)")
-    print(f"{'cap':>6}{'ASR':>8}{'mean_released_frac':>20}{'max_released':>14}"
+    print(f"{'cap':>6}{'ASR':>8}{'mean_released_frac':>20}{'bulk_frac':>11}{'max_released':>14}"
           f"{'slowdrip':>10}{'oos_all_blk':>13}{'FP_rate':>9}")
     for r in rows:
-        print(f"{r['cap']:>6}{r['asr']:>8.2f}{r['mean_frac']:>20.2f}{r['max_released']:>14}"
+        print(f"{r['cap']:>6}{r['asr']:>8.2f}{r['mean_frac']:>20.2f}{r['bulk_frac']:>11.2f}{r['max_released']:>14}"
               f"{r['drip']:>10}{str(r['oos_blocked']):>13}{r['fp']:>9.2f}")
     print("\nReading: raise the cap -> attacks tear down more (ASR/mean up) but FP falls;")
     print("lower it -> FP rises as legitimate bulk maintenance gets blocked. slowdrip is")
@@ -140,7 +143,7 @@ def main():
         import csv
         path = f"{args.csv}.csv"
         with open(path, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["cap", "asr", "mean_frac", "max_released", "drip", "oos_blocked", "fp"])
+            w = csv.DictWriter(f, fieldnames=["cap", "asr", "mean_frac", "bulk_frac", "max_released", "drip", "oos_blocked", "fp"])
             w.writeheader(); w.writerows(rows)
         print(f"wrote {path}", file=sys.stderr)
 

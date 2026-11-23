@@ -23,14 +23,16 @@ not assumed (the evaluation does not grade its own exam).
 
 ## Result: rate-cap sweep (ALLOWED_BLAST=1, window=60s)
 
-| cap | ASR | Mean fraction released | Max released per trace | Slow drip | All out-of-state blocked | **FP rate** |
-|---|---|---|---|---|---|---|
-| 1 | 0.40 | 0.53 | 8 | 13/13 | ✅ | **0.50** |
-| 2 | 1.00 | 0.66 | 8 | 13/13 | ✅ | 0.38 |
-| 3 | 1.00 | 0.80 | 8 | 13/13 | ✅ | 0.25 |
-| 5 | 1.00 | 0.93 | 8 | 13/13 | ✅ | 0.12 |
-| 8 | 1.00 | 1.00 | 8 | 13/13 | ✅ | **0.00** |
-| ∞ | 1.00 | 1.00 | 8 | 13/13 | ✅ | 0.00 |
+| cap | ASR | Mean fraction released (bulk + slow drip) | **Bulk only** (report Fig. 6) | Max released per trace | Slow drip | All out-of-state blocked | **FP rate** |
+|---|---|---|---|---|---|---|---|
+| 1 | 0.40 | 0.53 | 0.22 | 8 | 13/13 | ✅ | **0.50** |
+| 2 | 1.00 | 0.66 | 0.44 | 8 | 13/13 | ✅ | 0.38 |
+| 3 | 1.00 | 0.80 | 0.66 | 8 | 13/13 | ✅ | 0.25 |
+| 5 | 1.00 | 0.93 | 0.88 | 8 | 13/13 | ✅ | 0.12 |
+| 8 | 1.00 | 1.00 | 1.00 | 8 | 13/13 | ✅ | **0.00** |
+| ∞ | 1.00 | 1.00 | 1.00 | 8 | 13/13 | ✅ | 0.00 |
+
+The report plots the bulk-only column: slow drip passes at every cap, so averaging it in flattens the curve.
 
 ---
 

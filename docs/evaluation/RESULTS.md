@@ -129,7 +129,7 @@ across the runs.
 - **The gateway's own checks cost under 0.6 ms**, including every blocked release.
 - **A forwarded release pays one core round trip** (three WebConsole REST calls): about 13 ms, within the
   50 ms design target.
-- **Why the main matrix showed 90–194 ms.** The free5GC WebConsole is not started or stopped by `run.sh` /
+- **Why the main matrix showed 90–479 ms** (90–194 ms in the first 140 runs, 198–479 ms in BENIGN-05, which ran two hours later). The free5GC WebConsole is not started or stopped by `run.sh` /
   `force_kill.sh`, so one instance served every run (it had run since 2026-11-21 and held 617 MB). On every
   request it appends the NRF's AMF/SMF profiles to an in-memory list that it never clears
   (`webconsole/backend/webui_context/context.go`, `UpdateNfProfiles`), so each request got slower with the
