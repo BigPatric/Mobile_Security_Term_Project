@@ -135,8 +135,9 @@ across the runs.
   (`webconsole/backend/webui_context/context.go`, `UpdateNfProfiles`), so each request got slower with the
   total served. The precheck grew about 20 ms per repeat. `run_live_matrix.sh` now restarts the WebConsole with
   the core (and clears the NRF's stale `urilist`, which also accumulates but is not on the precheck path).
-- **The rerun changed nothing but the latency**: every cell released and blocked exactly as in the main
-  matrix, and all 70 releases were SMF 204 + probe 404.
+- **The rerun changed nothing but the latency**: every cell released exactly as many sessions per run as in
+  the main matrix (3 per capped attack and BENIGN-05, 1 for BENIGN-02/04) and blocked every further attempt;
+  all 70 releases were SMF 204 + probe 404.
 
 ---
 

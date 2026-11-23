@@ -632,7 +632,7 @@ Calls & n & Mean & p50 & p95 & Max \\
 \quad Full   & 420 & 0.047 & 0.035 & 0.127 & 0.272 \\
 \midrule
 \multicolumn{6}{@{}l}{\textit{Forwarded release with core precheck (30-run rerun)}} \\
-\quad L1+L3, full & 70 & 13.3 & 13.1 & 17.9 & 26.5 \\
+\quad L1+L3, full & 70 & 13.1 & 13.1 & 17.9 & 26.5 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -653,8 +653,9 @@ run, and on every request it appends the AMF and SMF profiles it fetches from th
 in-memory list that it never clears. Each request therefore got slower as the total number of
 requests grew; the instance had reached 617\,MB. The harness now restarts the WebConsole with the
 core, and in the rerun the precheck stayed at 9--27\,ms with no trend across the 30 runs. The slow
-WebConsole changed only how long a forwarded release waited. In the rerun every cell released and
-blocked exactly as many sessions as in the main matrix, and all 70 releases were confirmed by an SMF
+WebConsole changed only how long a forwarded release waited. In the rerun every cell released
+exactly as many sessions per run as in the main matrix (3 for each capped attack and for BENIGN-05,
+1 for BENIGN-02/04) and blocked every further attempt, and all 70 releases were confirmed by an SMF
 204 and a probe 404.
 
 \subsection{Rate-cap trade-off on synthetic traces}
@@ -777,7 +778,8 @@ legitimate bulk work would need a separate path, for example a capability whose 
 rate check honors. The guarantees that do not depend on any threshold come from the signed L2 and
 the L3 FSM; the cap is the fallback for when L2 is bypassed or a genuine capability is misused.
 
-\textbf{Sample size.} Each live cell ran five times, 150 runs in total. The live numbers are
+\textbf{Sample size.} Each live cell ran five times: 150 runs in the matrix, plus 30 in the
+latency rerun. The live numbers are
 means over those repeats on a real core, without confidence intervals; with five repeats and a
 deterministic agent we report the range instead (Fig.~\ref{fig:released}). Every blocked or capped
 cell has the same value in all five repeats. The precheck latency was measured on a core whose
@@ -835,8 +837,9 @@ is outbound, so the live leakage result does not exercise this fix.
 HTTP 401 or 500 from the WebConsole) as ``context gone'', so a transient error could have been
 counted as a release. The probes now count a session as gone only on positive evidence (HTTP
 404, or a context without that session), and the evidence records the HTTP status of every probe.
-In the final runs, all 428 counted releases were confirmed by an SMF-context probe that received
-HTTP 404, so the release counts in Sec.~\ref{sec:eval} do not depend on the old behavior.
+In the final runs, all 498 counted releases (428 in the matrix, 70 in the latency rerun) were
+confirmed by an SMF-context probe that received HTTP 404, so the release counts in
+Sec.~\ref{sec:eval} do not depend on the old behavior.
 
 \textbf{Smaller issues.} The FSM keys a session by the literal argument value, so a
 re-spelled session id (\code{" 1"} for \code{1}) is a different FSM instance. In the live
