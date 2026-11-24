@@ -1,87 +1,129 @@
 ===========================================================================
 與教授討論 — 需要請教的問題（2026-11-25）
-目標：12/2 前有一份差不多完整的草稿
+目標：12/2 前有一份完整草稿
 ===========================================================================
 
-開場一句話：
-  gateway 三層已在真實 free5GC 上跑完整個 live 矩陣。擋下攻擊的主力是 L1+L2。
-  L3 是後備層：它的 rate cap 在「L2 失效」模式下已 live 證明能把損害壓到 3，
-  而 core_precheck 也已 live 證明能在真核網上擋下「打向不存在 session」的 release
-  （DOS-03，5/5）。目前仍只有 offline 的，是 FSM 的純順序防護（有害亂序）。
-  以下想請老師確認收尾的範圍與定位。
+現況（一句話）：
+  三層 gateway 已在真實 free5GC 上跑完整個 live 矩陣。擋攻擊主力是 L1+L2；
+  L3 是後備層，其 rate cap 與 core_precheck 都已 live 證明，只剩 FSM 的純
+  順序防護仍 offline（對 free5GC release 冗餘）。
+
+系統（gateway 架在 agent 與核網工具之間，三層）：
+  L1  識別碼 token 化：SUPI 只以不透明 token 進出 agent，擋識別碼外洩。
+  L2  provenance/taint + gateway 自簽 capability：讀過不可信輸入的 session，
+      高風險操作需 gateway 簽發的 capability 才放行（擋注入來的指令）。
+  L3  後備層：rate cap（量上限）+ core_precheck（問核網目標在不在）+ FSM（順序）。
+
+攻擊（皆由被劫持的腳本 agent 經「被注入的 alert log」發動）：
+  ENUM-01  傾印所有 SUPI（外洩）                 → L1 擋
+  DOS-01   釋放所有 PDU session（斷網 DoS）       → L2 擋
+  DOS-02   DOS-01 + 偽造 change ticket           → 簽章 L2 擋；claim-only 時靠 L3 rate
+  DOS-03   指名釋放一個不存在的 session           → L3 core_precheck live 擋（5/5）
+  另有 5 個合法 operator 任務量誤擋率（FP）。
+
+核心主張（我們提出的價值，一句話）：
+  一個 policy-driven、core-grounded 的 agent→核網邊界防禦——決策與評估都錨定在
+  核網真實狀態；在真實 free5GC 上，用 ground truth 證明它能擋下由 indirect
+  prompt injection 驅動的識別碼外洩與 DoS，開銷可忽略，且優於 RBAC。
+  貢獻不是「某個攻擊的防禦」，而是「把保護寫成 policy、以核網真實狀態為準」這套
+  機制（故標題用 provenance-aware + core-grounded；generality 另以 offline 證明）。
+
+===========================================================================
+Q1.（最重要）這樣的完整度，達到期末標準了嗎？
+===========================================================================
+已完成（live 證據）：L1+L2 擋下所有攻擊、開銷可忽略；L3 rate cap（L2 失效時
+  壓到 3）與 core_precheck（擋不存在 session，DOS-03 5/5）皆有真核網數據。
+12/2 預期交出：一份完整報告草稿——
+  - live：L1+L2 全擋、L3 rate+precheck；
+  - offline + 清楚標示：FSM 順序防護、capability 濫用；
+  - 威脅模型假設：識別碼外洩（見 Q4）；
+  - limitations/future work：注入路徑、SMF 非標準路徑、rate cap 誤擋、token 可猜。
+  （三件收尾都是純改寫，不再跑實驗。）
+
+具體問法（把「夠不夠」拆成可回答的判準）：
+  「作為一個 systems-security 期末專題，以下三點是否已達標、還是哪一點老師認為
+   一定要再補？
+   (a) 核心貢獻深度：policy-driven + core-grounded 的機制，是否足夠作為主貢獻，
+       還是需要更強的新機制？
+   (b) 驗證強度：主力層（L1+L2）與 L3 的 rate+precheck 已 live、以 ground truth
+       驗證；其餘（FSM 順序、capability 濫用）offline+標示，這樣的 live/offline
+       比例可接受嗎？還是至少要再補一個 live 情境？
+   (c) 真實性：release 直打 SMF（非標準路徑）、注入路徑為假設，列為 limitation
+       /future work 是否可接受，還是其中一項必須做到真實（例如改走 NEF）？」
 
 ---------------------------------------------------------------------------
-Q1. 範圍
+Q2. 剩下的 offline 論證算不算驗證？
 ---------------------------------------------------------------------------
-背景：我們想在 12/2 前把報告收成一個完整版本。core_precheck 的 live 擋下
-      （原本的缺口）已補上。
+仍只有 offline 的兩項：FSM 的「有害亂序」防護（free5GC 上第二次 release 本就
+回 404，live 做不出傷害情境）、以及「真 capability 被劫持濫用」（說明見文末）。
 
-問：
-  「我們打算在下週三前完成這三件事：
-     (1) 把報告的宣稱對齊到現有證據（純改寫，含把 core_precheck 從『只有 offline
-         擋下』更新為已有 DOS-03 的 live 證據）；
-     (2) 把『識別碼外洩』的情境補到成立（見 Q4，用威脅模型假設）；
-     (3) 用最終版程式重新擷取圖表。
-   這樣的範圍，當作期末的完整進度夠嗎？還是老師覺得有哪一項一定要補——
-   例如補一次 live 的『真 capability 被濫用』實驗（見 Q2）？」
-
-我方傾向：做 (1)(2)(3) 就當完整；capability 濫用的 live 實驗有餘力才做。
+問：「這兩項用 offline deterministic 測試 + 清楚標示，算充分嗎？還是希望把
+    capability 濫用補成 live？」
+（我方傾向：offline + 標示即可；capability 濫用有餘力再補。）
 
 ---------------------------------------------------------------------------
-Q2. L3 剩下的 offline 論證算不算驗證
+Q3. L3 的命名與定位
 ---------------------------------------------------------------------------
-背景：L3 三個子檢查，兩個已 live：
-        - rate cap：在「L2 設錯」情境已 live（偽造 ticket DoS 8.4→3）。
-        - core_precheck：已 live（DOS-03，L1+L3 真核網擋下不存在 session，5/5）。
-      仍只有 offline 的：FSM 的「有害亂序 / out-of-state release」防護
-        —— 因為在 free5GC 上第二次 release SMF 本就回 404，live 無法製造出
-        「亂序造成真實傷害」的情境，只能用假 core 的 deterministic 測試。
-      另外「真 capability 被劫持濫用」的必要性，目前也是 offline。
+標題已是「Provenance-Aware, Core-Grounded」。要確認的是 L3 內部名稱。
 
-問：
-  「L3 在『L2 失效』與『打向不存在目標』兩種情況都已有 live 數據。剩下只有
-   offline 的是 FSM 純順序防護，以及真 capability 被濫用這一條。在期末報告裡，
-   這兩項用 offline deterministic 測試 + 清楚標示『這是離線驗證』，算充分嗎？
-   還是老師希望把『真 capability 被濫用』補成 live 實驗？」
-
-我方傾向：offline + 清楚標示即可；capability 濫用的 live 版有餘力才做。
-
----------------------------------------------------------------------------
-Q3. L3 的名稱與定位
----------------------------------------------------------------------------
-背景：報告標題已是「A Provenance-Aware, Core-Grounded Secure MCP Gateway」
-      （本來就沒有「Procedure-Aware」在標題裡）。要確認的是 L3 這一層內部
-      的名稱「procedure-aware verifier」。live 數據顯示 L3 三項子檢查裡：
-        - core_precheck（procedure-aware、core-grounded）已 live 擋下不存在目標；
-        - rate cap 在 L2 失效時 live 壓到 3；
-        - 只有 FSM 的純順序防護在真核網對 release 冗餘（SMF 本就 404），仍 offline。
-
-問：
-  「既然 core_precheck 已有 live 證據，我們想保留 L3『procedure-aware verifier』
-   這個名稱，但在報告裡誠實標註每個子檢查的驗證狀態：core_precheck 與 rate cap
-   為 live、FSM 純順序防護為 offline（對 free5GC release 冗餘）。整體貢獻定位為
-     『把決策錨定在核網真實狀態（core-grounded）的 5G 專屬邊界防禦；
-      L3 為不依賴 secret、procedure-aware 的後備層』。
-   這樣的名稱與誠實標註，老師覺得可以嗎？還是希望 FSM 的順序防護也補成 live
-   （需做 establishment tool 證明有害亂序，一週做不完、需順延）？」
-
-我方傾向：保留 procedure-aware + 誠實標註 live/offline 即可；establishment tool
-          的 live 亂序證明有餘力才做。
+問：「core_precheck 既已 live，我們想保留 L3『procedure-aware verifier』名稱，
+    但誠實標註：core_precheck、rate cap 為 live，FSM 純順序防護為 offline。
+    整體定位為『core-grounded 的 5G 邊界防禦，L3 為不依賴 secret 的後備層』。
+    可以嗎？」
+（我方傾向：保留 + 標註即可；若要 FSM 也 live，需做 establishment tool，一週
+  做不完、需順延。）
 
 ---------------------------------------------------------------------------
 Q4. 「外洩」的威脅模型假設
 ---------------------------------------------------------------------------
-背景：目前 ENUM 的 SUPI 只到達 agent，沒真的送出去給攻擊者。
+目前 ENUM 的 SUPI 只到達 agent，沒真的外傳。
 
-問：
-  「我們想在威脅模型裡假設『攻擊者可以觀察到 agent 的輸出』——因為 agent 會把
-   結果寫回監控/工單系統，而攻擊者本來就能在那裡寫入、也讀得到。有了這個假設，
-   識別碼外洩的描述就成立，我們就不必另外實作一個真的對外傳送工具。
-   這個假設可以接受嗎？還是老師認為一定要做出真的外傳工具？」
-
-我方傾向：先用這個假設；有時間再補真的外傳工具。
+問：「我們想假設『攻擊者可觀察 agent 輸出』（agent 會把結果寫回監控/工單，攻擊者
+    本就讀寫得到），外洩描述即成立，不必另做外傳工具。可接受嗎？」
+（我方傾向：先用假設；有餘力再做真的外傳工具。）
 
 ===========================================================================
-老師只有 5 分鐘：只問 Q1、Q2、Q3。
-  Q4 採「用威脅模型假設」；誤擋合法批次、注入路徑非標準 -> 寫進 limitations。
+參考 A：最完整版（除去 real LLM）vs 我們的落點
+===========================================================================
+「全 live」極值 = 把每條 offline/假設都補成真核網 live、且走真實路徑：
+  真外傳工具（A1）、建「亂序會真傷害」的 procedure（A3）、capability 濫用 live
+  run（A4）、release 改走 MnS/NEF（B2）、展示具體注入路徑（B1）、taint-aware
+  rate 消 BENIGN-05 誤擋（C2）、cumulative budget 擋 slow drip（C3）。
+  => 估計數週；沒有 contrived gap。
+我們實際落在：L1+L2 全 live、L3 rate+precheck live、FSM/capability 濫用
+  offline+標注、外洩用假設、B1/B2 列 future work。誠實、完整度高，非極值。
+
+最大困難（都指向：補 live 要「新建工具/procedure」，是工程時間）：
+  1. 測試床不穩：9 條並發 PDU session 常掉（concurrent-PFCP / T3580），重跑貴。
+  2. free5GC 架構：重複 release 只回 404，FSM 順序防護要 live 就得另建 procedure。
+  3. 真實性路徑：release 直打 SMF（非標準），貼近真實要改 MnS/NEF。
+
+===========================================================================
+參考 B：老師可能追問，先備好答案
+===========================================================================
+Q：為什麼選 SMF 當 release 介面？
+  A：SMF 的 ReleaseSMContext 是核網端真正的 teardown（刪 UPF N4/PFCP + PCF/UDM
+     狀態），是 network-initiated release，不必驅動 UE 就真的拆掉 session。選它
+     因為 (1) 可得 ground truth：SMF 204 + 事後探測 404 雙重確認；(2) 是 free5GC
+     上最小可達的 REST 端點，不必另架 NEF/MnS。代價：真正的呼叫者其實是 AMF，
+     真實 OAM 較可能走 MnS/NEF —— 已列為 limitation（B2）。
+
+Q：capability 濫用是指什麼？
+  A：被劫持的 agent 手上握著一張「真的、gateway 簽發的」capability。capability 只
+     綁「工具+次數」，不綁目標或意圖；operator 為維護窗口發一張「可釋放 9 次」的
+     憑證，agent 一旦被注入，L2 會放行每一次（它是真憑證，L2 分不出），只剩 L3 的
+     rate cap 把損害壓到 3。這是「即使 L2 正常也擋不住、所以需要 L3」的案例，目前
+     只有 offline 驗證（對應 Q2）。
+
+Q：攻擊走 SMF API，若真實要走 NEF，防禦還有價值嗎？
+  A：有，且價值與介面無關。gateway 檢查的是「工具呼叫的語意」（要釋放哪個 session）
+     與「核網真實狀態」，不是某個傳輸介面。真實路徑若是 NEF，工具就改呼叫 NEF，
+     同樣四個檢查照跑：L1 token 化、L2 taint+capability、L3 rate、core_precheck
+     （它查的是 AMF/WebConsole 的 session 狀態，本就與 release 走 SMF 或 NEF 無關）、
+     FSM。換言之 SMF vs NEF 只影響「示範的真實性」（B2 limitation），不影響機制是否
+     成立。我們直打 SMF 是為了在 free5GC 上拿到最直接的 ground-truth teardown。
+
+===========================================================================
+老師只有 5 分鐘：先問 Q1，再 Q3、Q2。
+Q4 採「用假設」；誤擋合法批次、注入路徑非標準 → 寫進 limitations。
 ===========================================================================
