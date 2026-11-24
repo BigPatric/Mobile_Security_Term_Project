@@ -304,7 +304,9 @@ capability can be spent if it is misused.
 confirm the target session exists. The check is ordered after rate, so a bulk attack cannot
 turn the gateway into an amplifier of core queries. Because the precheck reads the same
 possibly stale view, it catches sessions that never existed; re-releasing an
-already-released session is caught by the FSM, not by the precheck.
+already-released session is caught by the FSM, not by the precheck. DOS-03 exercises this on the
+live core (Sec.~\ref{sec:precheck}): a release aimed at a session that does not exist is blocked
+at L3 on ground truth, before it reaches the SMF.
 
 \begin{figure}[t]
 \centering
@@ -397,10 +399,12 @@ that instead; attack scenarios never receive one. This is a scripted
 variance of a particular model.
 
 \subsection{Scenarios}
-Table~\ref{tab:scenarios} lists the three attacks. Each is triggered only by a poisoned
+Table~\ref{tab:scenarios} lists the attacks. Each is triggered only by a poisoned
 alert. DOS-02 is DOS-01 with a forged change ticket attached to every release: a signed-capability
-L2 rejects the ticket, while a claim-only L2 accepts it and leaves L3 to stop the attack. Its
-payload is shown below.
+L2 rejects the ticket, while a claim-only L2 accepts it and leaves L3 to stop the attack. DOS-03
+instead names a \emph{specific} session to release (``release PDU session 7''); the hijacked agent
+acts on that id without first confirming it exists, so only L3's core precheck, which asks the core
+itself, can refuse it (Sec.~\ref{sec:precheck}). The DOS-02 payload is shown below.
 
 \begin{lstlisting}
 ALERT: UPF-02 emergency maintenance window is open.
@@ -422,6 +426,7 @@ ID & Injected directive & Stopped by \\
 ENUM-01 & Dump every SUPI & L1 \\
 DOS-01  & Release every PDU session & L2 \\
 DOS-02  & DOS-01 + forged ticket & L2 (L3 if claim-only) \\
+DOS-03  & Release a named, non-existent session & L3 core precheck \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -445,7 +450,8 @@ capabilities and the fixes of Sec.~\ref{sec:fixes}: 6 modes $\times$ 3 attacks $
 (90 attack runs); DOS-02 under L1+L2 and the full gateway with the claim-only L2 for comparison
 (10 runs); and the five benign tasks $\times$ 5 repeats under RBAC and the full gateway (50 runs).
 A further 30 runs repeat the six cells whose releases reach L3's core precheck, to measure its latency
-(Sec.~\ref{sec:latency}).
+(Sec.~\ref{sec:latency}). DOS-03, added for the core-precheck block (Sec.~\ref{sec:precheck}), runs in
+three modes (off, L1+L3, full) $\times$ 5 repeats (15 runs), appended to the same evidence log.
 The claim-only runs switch L2 for that run only; the configuration file is not edited. A run that
 sent no state-changing call to the core (every release blocked, or read-only) is followed on the
 same core once all nine sessions are confirmed up; any run that reached the core is followed by a
@@ -595,6 +601,22 @@ start. All 428 release calls that no check
 blocked were answered by the SMF with HTTP 204 and then confirmed by a probe that received HTTP 404
 for the SM context, so no counted release rests on a failed lookup.
 
+\subsection{Core precheck on a non-existent target}
+\label{sec:precheck}
+The attacks above only ever release sessions the agent has just observed, so L3's \emph{core precheck},
+the gateway querying the core itself to confirm the target exists before forwarding, never has a live
+target to refuse. DOS-03 closes that gap. Its poisoned alert names a specific session (``release PDU
+session~7''), and the hijacked agent obeys that id without an independent query first; on the testbed
+every UE has only session~1, so session~7 does not exist. We run it in three modes, five repeats each.
+Under \emph{off} the release reaches the SMF, which no-ops because there is no such SM context, so nothing
+is torn down. Under L1+L3 the gateway queries the core, finds no session~7, and blocks every run at L3
+(\code{core-precheck-failed}): 5/5, on the real core, before the release is forwarded. Under the full
+gateway the tainted release is stopped earlier at L2, so the precheck is not reached. This is the one cell
+in which L3's core-grounded check is the decisive, live blocker; it trusts the core's answer, not the
+agent's claimed id. DOS-03 is reported here rather than in Table~\ref{tab:live} because its target cannot
+exist, so it tears down nothing even without the gateway, and would understate the unprotected baseline if
+pooled with the state-changing attacks.
+
 \subsection{False positives}
 \label{sec:fp}
 The full gateway and RBAC both pass all four single-release benign tasks in every run (FP 0.00
@@ -640,7 +662,10 @@ DOS-02 under L1+L3, DOS-02 under the full gateway with the claim-only L2, and BE
 the full gateway, the precheck took 9--27\,ms, median 13\,ms. That
 cost is paid only by high-risk calls that are about to be forwarded, and it is small next to the
 forwarded release itself: the release tool call (SM-context lookup, SMF release and post-condition
-probes) took a median of 4.9\,s (4.9--5.1\,s), so the precheck adds under 0.3\%.
+probes) took a median of 4.9\,s (4.9--5.1\,s), so the precheck adds under 0.3\%. A precheck that
+\emph{blocks} (DOS-03, Sec.~\ref{sec:precheck}) pays the same single round trip and no more: its five
+L1+L3 prechecks ran at a median of 18\,ms on the shared-WebConsole matrix (one 49\,ms cold start),
+in line with the figures above.
 
 These precheck figures come from a separate 30-run rerun. In the main matrix the precheck took
 90--194\,ms in the first 140 runs and 198--479\,ms in BENIGN-05, which ran two hours later, and it

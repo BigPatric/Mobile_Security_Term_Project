@@ -21,8 +21,19 @@ A1. ENUM 的「外洩」沒有真的送出去
 A2. core_precheck 的「擋下」沒 live 測過
     問題：precheck 機制 live 會跑（+13ms），但 live 目標都真的存在，
           所以它從沒在真 core 上真的擋下任何東西；「擋下」只有 offline。
-    狀態：機制 live、擋下 offline。
-    收法：加一個「打不存在 pdu_session_id」的 live 情境〔半天，只加 JSON+cell〕。
+    狀態：已 LIVE 證實（2026-11-25）。DOS-03 L1+L3 在真 free5GC 上 5/5 被
+          L3/core-precheck-failed 擋下、released 0；off 則 release 送到 SMF
+          no-op。evidence 進 results/evidence/attack_evidence_final.jsonl、
+          表進 results/tables/main_cells.csv。報告已於 RESULTS.md §1b 補上。
+          機制接線：新增 DOS-03 情境（benchmark/attacks/
+          release_named_session.json）：注入 log 指名「release PDU session 7」，
+          agent 新增 release_named 路徑會照指名 id 直接下手、不先 query 確認，
+          真 core 上只有 session 1 → 在 L1+L3 會被 L3/core-precheck-failed
+          在真 core 上擋下（full stack 則先在 L2 擋）。已加 e2e offline guard
+          （tests/test_e2e_scenarios.py::test_named_nonexistent_session_
+          blocked_live_by_core_precheck）＋matrix cell（run_live_matrix.sh
+          ATTACKS 與 PRESET_FINAL 皆含 DOS-03）。
+    待辦：無（已完成）。選做：補 rbac/L1 兩格讓矩陣列完整（不影響結論）。
 
 A3. FSM 對 release 無 live 防護價值
     問題：FSM 擋的「重複 release」在 free5GC 上 SMF 本就回 404，冗餘；
@@ -95,5 +106,5 @@ D3. WebConsole 記憶體洩漏：讓 core precheck 延遲從 ~13ms 漂到 90~479
     已用「每次重啟 WebConsole 的 30 次重測」取乾淨值。
 
 ===========================================================================
-收尾優先：A2（半天變 live）、A1+B（寫假設）、A3/A4 誠實標示。
+收尾優先：A2 已 LIVE 完成；接著 A1+B（寫假設）、A3/A4 誠實標示。
 ===========================================================================

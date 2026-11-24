@@ -67,7 +67,7 @@ UE_CFG="$UERANSIM/config/free5gc-ue.yaml"
 
 # --- the matrix ------------------------------------------------------------- #
 # Edit freely. Each line: "<SCENARIO> <extra args to run_attack_demo.py>".
-read -r -a ATTACKS <<< "${ATTACKS:-ENUM-01 DOS-01 DOS-02}"
+read -r -a ATTACKS <<< "${ATTACKS:-ENUM-01 DOS-01 DOS-02 DOS-03}"
 MODES=(
   "--gateway off"
   "--gateway rbac"
@@ -103,6 +103,8 @@ DOS-01|--gateway off;DOS-02|--gateway off;DOS-01|--gateway rbac;DOS-02|--gateway
 DOS-01|--gateway on --layers L1;DOS-02|--gateway on --layers L1;\
 DOS-01|--gateway on --layers L1,L3;DOS-02|--gateway on --layers L1,L3;\
 DOS-02|--gateway on --layers L1,L2 --l2-claim-only;DOS-02|--gateway on --l2-claim-only;\
+DOS-03|--gateway off;DOS-03|--gateway rbac;DOS-03|--gateway on --layers L1;\
+DOS-03|--gateway on --layers L1,L3;DOS-03|--gateway on;\
 BENIGN-02|--gateway on;BENIGN-02|--gateway rbac;BENIGN-04|--gateway on;BENIGN-04|--gateway rbac"
 # PRESET=latency — only the cells whose releases pass L3's core precheck (6 cells, 30 runs
 # at REPEATS=5), into results/evidence/attack_evidence_latency.jsonl, each on a fresh core AND a

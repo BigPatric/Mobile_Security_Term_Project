@@ -4,20 +4,23 @@
 ===========================================================================
 
 開場一句話：
-  gateway 三層已在真實 free5GC 上跑完 180 次 live run。擋下攻擊的主力是
-  L1+L2。L3 是後備層：它的 rate cap 在「L2 失效」模式下已 live 證明能把
-  損害壓到 3；但「即使 L2 正常也需要 L3」的完整論證目前在 offline。
+  gateway 三層已在真實 free5GC 上跑完整個 live 矩陣。擋下攻擊的主力是 L1+L2。
+  L3 是後備層：它的 rate cap 在「L2 失效」模式下已 live 證明能把損害壓到 3，
+  而 core_precheck 也已 live 證明能在真核網上擋下「打向不存在 session」的 release
+  （DOS-03，5/5）。目前仍只有 offline 的，是 FSM 的純順序防護（有害亂序）。
   以下想請老師確認收尾的範圍與定位。
 
 ---------------------------------------------------------------------------
 Q1. 範圍
 ---------------------------------------------------------------------------
-背景：我們想在 12/2 前把報告收成一個完整版本。
+背景：我們想在 12/2 前把報告收成一個完整版本。core_precheck 的 live 擋下
+      （原本的缺口）已補上。
 
 問：
   「我們打算在下週三前完成這三件事：
-     (1) 把報告的宣稱對齊到現有證據（純改寫，已完成大半）；
-     (2) 把『識別碼外洩』的情境補到成立（見 Q4）；
+     (1) 把報告的宣稱對齊到現有證據（純改寫，含把 core_precheck 從『只有 offline
+         擋下』更新為已有 DOS-03 的 live 證據）；
+     (2) 把『識別碼外洩』的情境補到成立（見 Q4，用威脅模型假設）；
      (3) 用最終版程式重新擷取圖表。
    這樣的範圍，當作期末的完整進度夠嗎？還是老師覺得有哪一項一定要補——
    例如補一次 live 的『真 capability 被濫用』實驗（見 Q2）？」
@@ -25,37 +28,45 @@ Q1. 範圍
 我方傾向：做 (1)(2)(3) 就當完整；capability 濫用的 live 實驗有餘力才做。
 
 ---------------------------------------------------------------------------
-Q2. L3 的 offline 論證算不算驗證
+Q2. L3 剩下的 offline 論證算不算驗證
 ---------------------------------------------------------------------------
-背景：L3 的 rate cap 在「L2 設錯」情境已 live 證明（偽造 ticket DoS 8.4→3）。
-      但「即使 L2 正常也需要 L3」的理由——真 capability 被濫用、core 真實狀態
-      擋下不存在目標、有害亂序——目前只有 offline deterministic 測試。
+背景：L3 三個子檢查，兩個已 live：
+        - rate cap：在「L2 設錯」情境已 live（偽造 ticket DoS 8.4→3）。
+        - core_precheck：已 live（DOS-03，L1+L3 真核網擋下不存在 session，5/5）。
+      仍只有 offline 的：FSM 的「有害亂序 / out-of-state release」防護
+        —— 因為在 free5GC 上第二次 release SMF 本就回 404，live 無法製造出
+        「亂序造成真實傷害」的情境，只能用假 core 的 deterministic 測試。
+      另外「真 capability 被劫持濫用」的必要性，目前也是 offline。
 
 問：
-  「L3 在『L2 失效』下的防護我們已經有 live 數據。但『即使 L2 正常運作、
-   L3 仍有必要』這部分——特別是真 capability 被劫持濫用——目前只有離線測試。
-   在期末報告裡，這部分用離線測試加上清楚標示『這是離線驗證』，算充分嗎？
-   還是老師希望我們把這一個情境補成 live 實驗？」
+  「L3 在『L2 失效』與『打向不存在目標』兩種情況都已有 live 數據。剩下只有
+   offline 的是 FSM 純順序防護，以及真 capability 被濫用這一條。在期末報告裡，
+   這兩項用 offline deterministic 測試 + 清楚標示『這是離線驗證』，算充分嗎？
+   還是老師希望把『真 capability 被濫用』補成 live 實驗？」
 
-我方傾向：離線 + 清楚標示即可；capability 濫用的 live 版有餘力才做。
+我方傾向：offline + 清楚標示即可；capability 濫用的 live 版有餘力才做。
 
 ---------------------------------------------------------------------------
-Q3. 定位與標題（最重要）
+Q3. L3 的名稱與定位
 ---------------------------------------------------------------------------
-背景：live 顯示 procedure-aware 那層（FSM）在真核網對 release 沒有獨立防護
-      （它擋的「重複 release」SMF 本來就自己拒絕）。L3 真正 live 有用的是
-      rate cap，且只在 L2 失效時啟動。
+背景：報告標題已是「A Provenance-Aware, Core-Grounded Secure MCP Gateway」
+      （本來就沒有「Procedure-Aware」在標題裡）。要確認的是 L3 這一層內部
+      的名稱「procedure-aware verifier」。live 數據顯示 L3 三項子檢查裡：
+        - core_precheck（procedure-aware、core-grounded）已 live 擋下不存在目標；
+        - rate cap 在 L2 失效時 live 壓到 3；
+        - 只有 FSM 的純順序防護在真核網對 release 冗餘（SMF 本就 404），仍 offline。
 
 問：
-  「根據 live 數據，L3 的價值是『L2 失效時的後備（rate cap 壓到 3）』，
-   而不是 procedure-aware 的順序防護。所以我們想把標題裡的『Procedure-Aware』
-   拿掉，把貢獻重新定位成——
-     『一個把決策錨定在核網真實狀態（core-grounded）、並用核網真實狀態
-      來評估的 5G 專屬邊界防禦；L3 為不依賴 secret 的後備層』。
-   這樣可以嗎？（我們已先照這個版本改好 main.tex，若老師要保留再還原。）」
+  「既然 core_precheck 已有 live 證據，我們想保留 L3『procedure-aware verifier』
+   這個名稱，但在報告裡誠實標註每個子檢查的驗證狀態：core_precheck 與 rate cap
+   為 live、FSM 純順序防護為 offline（對 free5GC release 冗餘）。整體貢獻定位為
+     『把決策錨定在核網真實狀態（core-grounded）的 5G 專屬邊界防禦；
+      L3 為不依賴 secret、procedure-aware 的後備層』。
+   這樣的名稱與誠實標註，老師覺得可以嗎？還是希望 FSM 的順序防護也補成 live
+   （需做 establishment tool 證明有害亂序，一週做不完、需順延）？」
 
-我方傾向：拿掉。若老師堅持保留 Procedure-Aware，代表要做 establishment tool
-          去 live 證明有害亂序，那一週做不完、需順延。
+我方傾向：保留 procedure-aware + 誠實標註 live/offline 即可；establishment tool
+          的 live 亂序證明有餘力才做。
 
 ---------------------------------------------------------------------------
 Q4. 「外洩」的威脅模型假設
