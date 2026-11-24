@@ -50,7 +50,7 @@
 
 \begin{document}
 
-\title{A Provenance- and Procedure-Aware Secure MCP Gateway\ for LLM Agents Operating a 5G Core}
+\title{A Provenance-Aware, Core-Grounded Secure MCP Gateway\ for LLM Agents Operating a 5G Core}
 
 \author{\IEEEauthorblockN{\authorname}
 \IEEEauthorblockA{Mobile Network Security, Fall 2026 --- Final Project Report\\
@@ -70,9 +70,10 @@ help, because every malicious call is one the agent is allowed to make. We prese
 free5GC core and treats the agent as already compromised. It enforces three
 layers: (L1) identifier tokenization, so the agent never holds a real SUPI; (L2) provenance
 and taint tracking, so untrusted content cannot drive a high-risk state change unless the call
-carries a capability the gateway itself signed; and (L3) a
-procedure-aware verifier that checks every call against the TS~23.502 PDU-session state
-machine and a rate budget, regardless of any authorization the call claims to carry. We
+carries a capability the gateway itself signed; and (L3) a verifier that trusts nothing the
+call carries: it binds every call to a rate budget and re-checks it against the core's own live
+state (ground truth), with a TS~23.502 procedure state machine as a general, config-driven
+mechanism. We
 evaluate on a live free5GC + UERANSIM testbed with three injection attacks, using a scripted
 agent that always obeys the injected directive in place of a real LLM, and count an
 attack as successful only when the SMF confirms that the session is really gone. Over 150 live
@@ -87,7 +88,10 @@ misused by a hijacked agent. The full gateway
 produces no false positives on four benign tasks that release at most one session each, but its
 rate cap blocks a legitimate bulk maintenance task after three releases. It adds a median of
 0.04\,ms to ordinary calls; a release it lets through costs a median of 13\,ms more
-(9--27\,ms, against about 5\,s for the release itself), spent querying the core. Offline
+(9--27\,ms, against about 5\,s for the release itself), spent querying the core. The procedure
+state machine is enforced and general across procedures, but on free5GC's release path it is
+redundant with the SMF, which already rejects the only out-of-order call; its protective value
+is therefore shown only offline and on other procedures. Offline
 experiments add a rate-cap trade-off curve, an
 adaptive-attacker analysis that marks where the defense stops holding (slow drip), and
 evidence that new procedures and tools are protected by configuration alone.
@@ -124,12 +128,13 @@ capability to do damage instead of relying on its judgment.
 \textbf{Contributions.}
 \begin{itemize}
   \item A gateway design with three layers that each protect a different property:
-        identifier confidentiality (L1), source integrity (L2) and procedure integrity
-        (L3). The layers rest on different assumptions: L2 needs the gateway's secret and an
-        authentic operator path, while L3, based on a simplified model of the TS~23.502
-        PDU-session release procedure~\cite{ts23502}, trusts no secret and no authorization the
-        call carries. L3 is therefore the layer that still limits damage, per rate window, when L2
-        is bypassed or a genuine capability is misused.
+        identifier confidentiality (L1), source integrity (L2), and availability (L3). The layers
+        rest on different assumptions: L2 needs the gateway's secret and an authentic operator
+        path, while L3 trusts no secret and no authorization the call carries: it binds every call
+        to a rate budget and re-checks it against the core's own live state (ground truth), with a
+        TS~23.502 procedure state machine~\cite{ts23502} as a general, config-driven mechanism. L3
+        is therefore the layer that still limits damage, per rate window, when L2 is bypassed or a
+        genuine capability is misused.
   \item A config-driven policy engine in which every layer is a pluggable check, so
         protection for a new tool or procedure is added by editing data, not code.
   \item A live evaluation on free5GC~\cite{free5gc} and UERANSIM~\cite{ueransim} with
