@@ -1,7 +1,0 @@
-scenario,mode,runs,released_mean,released_min,released_max,blocked_mean,identifier_leaked,false_positive
-BENIGN-02,L1+L2+L3,5,1.0,1,1,0.0,0,0
-BENIGN-04,L1+L2+L3,5,1.0,1,1,0.0,0,0
-BENIGN-05,L1+L2+L3,5,3.0,3,3,5.6,0,5
-DOS-01,L1+L3,5,3.0,3,3,5.8,0,0
-DOS-02,L1+L3,5,3.0,3,3,5.8,0,0
-DOS-02,L1+L2+L3(claim),5,3.0,3,3,5.8,0,0

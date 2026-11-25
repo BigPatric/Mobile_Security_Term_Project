@@ -12,7 +12,7 @@ the tool registry). When the Secure MCP Gateway is built, an `McpToolClient`
 implementing the SAME interface drops in here and the agent code does not change.
 
 This is what makes the agent "gateway-ready": the enforcement point — identifier
-tokenization, taint tracking, procedure-aware verification — lives BEHIND this
+tokenization, synchronized views, freshness checks — lives BEHIND this
 seam (in the gateway), not inside the agent. The agent only ever sees opaque
 tool names, whatever identifier tokens it is handed, and JSON results; it has no
 knowledge of whether a tool ran locally or behind a remote MCP gateway.

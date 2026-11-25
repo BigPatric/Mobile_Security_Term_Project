@@ -166,7 +166,8 @@ def query_subscriber_session(supi_token: str) -> Dict:
 # ---------------------------------------------------------------------------
 # Tool 3 — trigger_pdu_session_release  (HIGH-RISK, VERIFIED)
 # ---------------------------------------------------------------------------
-def trigger_pdu_session_release(supi_token: str, pdu_session_id: int, **_gw_meta) -> Dict:
+def trigger_pdu_session_release(supi_token: str, pdu_session_id: int,
+                                expected_sm_context_ref: str = "", **_gw_meta) -> Dict:
     """
     **HIGH-RISK** — Release an active PDU session. The agent initiates this as a
     RESTful call to the free5GC core's own Nsmf_PDUSession ReleaseSMContext
@@ -185,6 +186,10 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int, **_gw_meta
     Returns status "ok" with verified=True ONLY if the real 5GC state changed.
     If there was no live session to begin with (core off / UE not attached),
     it returns a NO-OP result — it does NOT fake a release.
+
+    `expected_sm_context_ref` is set by the gateway (L1 freshness), never by the agent:
+    the release happens only if the session is still that exact SM context. The ref is
+    unique per session, so a session re-established under the same id is not hit.
     """
     _ensure_cfg()
     ns = cs.norm_supi(supi_token)
@@ -225,6 +230,13 @@ def trigger_pdu_session_release(supi_token: str, pdu_session_id: int, **_gw_meta
             "status": "error", "verified": False, "action": "PDU_SESSION_RELEASE",
             "supi": ns, "pdu_session_id": psi,
             "error": "AMF did not expose an SM-context reference; cannot address a core release.",
+        }
+
+    if expected_sm_context_ref and sm_context_ref != expected_sm_context_ref:
+        return {
+            "status": "noop", "verified": False, "action": "PDU_SESSION_RELEASE",
+            "supi": ns, "pdu_session_id": psi,
+            "detail": "The session changed since it was checked — release not performed.",
         }
 
     # Discover the UE's data-plane tunnel IP over REST (SMF OAM) BEFORE release —

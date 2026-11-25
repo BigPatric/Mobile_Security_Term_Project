@@ -1,131 +1,34 @@
-# ============================================================
-# Secure MCP Gateway — Project Configuration
-# ============================================================
-
-# Agent: a deterministic, scripted ReAct loop (agent/react_agent.py) that always
-# obeys directives in untrusted alerts -- the worst case. No LLM API key is needed.
-
-# 5G Core Backend:
-#   LIVE mode: calls free5GC WebConsole REST API & runs UERANSIM nr-cli
-live_5gc: true
-
+# Core endpoints (free5GC v4.1.0 + UERANSIM testbed)
 free5gc:
   webconsole_url: "http://localhost:5000"
   plmn_id: "20893"
   username: "admin"
   password: "free5gc"
 
-ueransim:
-  nr_cli_path: "./UERANSIM/build/nr-cli"
-  default_supi: "imsi-208930000000001"
-
-# SMF service-based interface (Nsmf_PDUSession).
-# Used for NETWORK-INITIATED PDU session release: the attack calls the core's
-# own ReleaseSMContext API so the SMF/UPF tear the session down. The UE is not
-# driven to release itself. Matches smfcfg.yaml sbi (scheme/registerIPv4/port).
-smf:
+smf:                       # Nsmf_PDUSession SBI, for the release call
   sbi_url: "http://127.0.0.2:8000"
 
-# NRF access-token endpoint. Only used when free5GC SBI is OAuth2-protected
-# (nrfcfg oauth: true); the evaluated testbed runs with oauth: false, so the SMF
-# release needs no token. When enabled it requires scope 'nsmf-pdusession'.
-# The agent presents a registered NF identity whose per-instance certificate the
-# NRF trusts (cert_dir is scanned for cert/<nftype>_<uuid>.pem). Set `consumer`
-# to pin a specific identity instead of auto-detecting.
-nrf:
+nrf:                       # only used when the SBI is OAuth2-protected (nrfcfg oauth: true)
   sbi_url: "http://127.0.0.10:8000"
   cert_dir: "free5gc/cert"
-  # consumer: { type: "NEF", instance_id: "f7ec9409-15a4-4440-9f5e-cb51d4053ecd" }
 
-# Secure MCP Gateway. When enabled, a GatewayToolClient wraps the tool seam and
-# enforces the defense layers. CLI --gateway on/off overrides this per run (for
-# A/B baseline-vs-protected comparison and ablation studies).
-gateway:
-  enabled: true
-  layers:
-    tokenizer: true     # Layer 1 — Identifier Tokenizer (SUPI opacity)
-    taint: true        # Layer 2 — Provenance & Taint Tracking
-    verifier: true      # Layer 3 — Procedure-Aware FSM + rate limit
-  # ----------------------------------------------------------------------
-  # Policy pipeline (gateway/policy.py). Each tool lists an ORDERED chain of
-  # checks; the first check that blocks stops the call before the core.
-  #   identifier (L1) · provenance (L2) · fsm / rate / core_precheck (L3)
-  # Turning a layer off above drops its checks from every chain (ablation).
-  # Adding a procedure or guarding a new tool = editing this section, no code.
-  # ----------------------------------------------------------------------
+# L1: privacy + synchronization (gateway/l1/, docs/L1_DESIGN.md)
+l1:
+  sync:
+    interval_sec: 2          # bulk poll: 1 request per cycle at any number of UEs
+    max_age_sec: 6           # older than this, views are flagged stale
+    audit_per_cycle: 10      # SM contexts checked against the SMF per cycle
+    shrink_guard: 0.5        # losing more than half the UEs at once needs a second snapshot
+  tokens:
+    epoch_sec: 3600          # rotate tokens hourly (0 = never)
+    grace_sec: 120           # previous epoch's tokens still accepted as arguments
+    ue_pools: ["10.60.0.0/15"]
+  views: {page_size: 50, max_changes: 100, min_group: 5}
   policy:
-    untrusted_sources: [get_alert_logs]          # results from these taint the session
-    identifier_params: [supi_token, supi, imsi]  # must carry gateway-issued tokens
-
-    procedures:
-      pdu_session:                               # TS 23.502 §4.3 life-cycle
-        key: ["supi_token|supi|imsi", pdu_session_id]
-        initial: UNKNOWN
-        states: [UNKNOWN, ACTIVE, RELEASED]
-        observe:
-          - tool: query_subscriber_session
-            when: {status: ok}
-            for_each: subscriber.pdu_sessions
-            key: [subscriber.supi, item.id]
-            set: ACTIVE
-            keep: [RELEASED]                     # gateway memory beats a stale AMF view
-        transitions:
-          release:
-            from: [ACTIVE, UNKNOWN]              # existence is checked against the core below
-            to: RELEASED
-            commit_when: {status: ok, verified: true}
-
+    untrusted_sources: [get_alert_logs]
+    untrusted_identifiers: mask          # mask | tokenize
+    identifier_params: [supi_token, supi, imsi]
     tools:
-      "*":                                       # any tool without its own entry
-        checks: [identifier]
-
+      "*": {checks: [identifier]}
       trigger_pdu_session_release:
-        checks:
-          - identifier
-          # L2: a tainted session may release only with a gateway-SIGNED operator
-          # capability (minted on the trusted operator path; gateway/capability.py).
-          # verify_authorization: false = legacy claim-only check (any string passes),
-          # kept for the before/after comparison of DOS-02.
-          - provenance: {allow_authorized: true, verify_authorization: true}
-          - fsm: {procedure: pdu_session, event: release}
-          # Bulk-teardown cap. Set to a fixed operator-normal release ceiling
-          # (what a legitimate NOC agent would ever do in a minute), NOT tied to
-          # testbed size: that way a bulk DOS trips after `max` releases regardless
-          # of N, so blocked-fraction = 1 - max/N improves as the network grows.
-          # max=3 leaves headroom above a single legitimate release (FP stays 0).
-          # Not exempt for authorized callers: a stolen/over-scoped capability, or a forged
-          # one under the legacy claim-only L2, is still capped here.
-          - rate: {bucket: pdu_release, max: 3, window_sec: 60, exempt_authorized: false}
-          # Ground truth: the gateway itself asks the core that this session
-          # exists before forwarding (placed after rate so a bulk attack can't
-          # make the gateway hammer the core with prechecks).
-          - core_precheck:
-              via: query_subscriber_session
-              args: {supi_token: $supi_token}
-              expect:
-                status: ok
-                exists: {in: subscriber.pdu_sessions, where: {id: $pdu_session_id}}
-
-      list_subscribers:
-        checks:
-          - identifier
-          - rate: {bucket: enumeration, max: 5, window_sec: 60}
-
-# Comparison baselines, expressed in the SAME policy language so the comparison
-# is like-for-like. Run with:  run_attack_demo.py --gateway rbac --scenario ...
-baselines:
-  rbac:
-    # Classic role allow-list: the NOC-agent role may call these four tools,
-    # nothing else. No identifier opacity, no provenance, no procedure state.
-    layers: {tokenizer: false, taint: false, verifier: false}
-    policy:
-      tools:
-        "*":                         {checks: [deny]}
-        get_alert_logs:              {checks: []}
-        list_subscribers:            {checks: []}
-        query_subscriber_session:    {checks: []}
-        trigger_pdu_session_release: {checks: []}
-
-demo:
-  log_level: "INFO"
-  evidence_log: "attack_evidence.jsonl"
+        checks: [identifier, {freshness: {max_age_sec: 1, require_etag: true}}]

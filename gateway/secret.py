@@ -2,17 +2,17 @@
 gateway/secret.py — the gateway's private key material
 ======================================================
 One master secret per gateway instance. It never leaves the gateway, is never
-written to the repo, and is never shown to the agent. Two keys are derived
-from it, one per purpose, so a key used for one job can't be abused for the other:
+written to the repo, and is never shown to the agent. One key is
+derived per purpose, so a key used for one job can't be abused for another:
 
     tokenize    L1: SUPI -> opaque token   (HMAC, so tokens can't be guessed offline)
-    capability  L2: signing operator authorization capabilities
+    etag        L1: SM-context ref -> session etag
 
 Source of the master secret, in order:
     1. the MCP_GATEWAY_SECRET environment variable (hex string), so several gateway
-       processes can share one key if they must agree on tokens / capabilities;
-    2. otherwise 32 fresh random bytes at start-up (tokens and capabilities then
-       live only as long as the gateway process, which is what the experiments use).
+       processes can share one key and agree on tokens;
+    2. otherwise 32 fresh random bytes at start-up (tokens then live only
+       as long as the gateway process).
 """
 
 from __future__ import annotations
