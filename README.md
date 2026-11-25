@@ -50,7 +50,7 @@ gateway/         mcp_gateway (the boundary) · policy (check chains) · secret
 agent/           ToolClient seam        free5gc_tools/  calls to the live core
 sim/             simulated core         experiments/    scale study → results/l1/
 tests/           offline tests          benchmark/      ENUM-01 (identifier-dump injection)
-docs/            L1 design and results · final_report (still the v1 text) · proposal · notes
+docs/            L1 design · threat model · results · final_report/REPORT.md (L1; latex/ is archived v1) · proposal
 free5gc/ UERANSIM/   vendored testbed, never modified
 ```
 
