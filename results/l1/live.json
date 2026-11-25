@@ -1,0 +1,90 @@
+{
+ "mode": "live",
+ "n_cycles": 6,
+ "interval_sec": 2.0,
+ "sync_stats": {
+  "cycles": 7,
+  "failed": 0,
+  "held": 0,
+  "refreshes": 0,
+  "audited": 63,
+  "audit_dead": 0
+ },
+ "last_error": null,
+ "cycles": [
+  {
+   "cycle": 0,
+   "version": 1,
+   "ues": 9,
+   "summary_bytes": 212,
+   "stale": false,
+   "age_sec": 0.42
+  },
+  {
+   "cycle": 1,
+   "version": 1,
+   "ues": 9,
+   "changes": 0,
+   "change_bytes": 128,
+   "poll_ms": 89.28,
+   "resync_required": false,
+   "stale": false,
+   "age_sec": 0.09
+  },
+  {
+   "cycle": 2,
+   "version": 1,
+   "ues": 9,
+   "changes": 0,
+   "change_bytes": 128,
+   "poll_ms": 72.86,
+   "resync_required": false,
+   "stale": false,
+   "age_sec": 0.07
+  },
+  {
+   "cycle": 3,
+   "version": 1,
+   "ues": 9,
+   "changes": 0,
+   "change_bytes": 128,
+   "poll_ms": 35.16,
+   "resync_required": false,
+   "stale": false,
+   "age_sec": 0.04
+  },
+  {
+   "cycle": 4,
+   "version": 1,
+   "ues": 9,
+   "changes": 0,
+   "change_bytes": 128,
+   "poll_ms": 65.94,
+   "resync_required": false,
+   "stale": false,
+   "age_sec": 0.07
+  },
+  {
+   "cycle": 5,
+   "version": 1,
+   "ues": 9,
+   "changes": 0,
+   "change_bytes": 128,
+   "poll_ms": 90.6,
+   "resync_required": false,
+   "stale": false,
+   "age_sec": 0.09
+  },
+  {
+   "cycle": 6,
+   "version": 1,
+   "ues": 9,
+   "changes": 0,
+   "change_bytes": 128,
+   "poll_ms": 60.03,
+   "resync_required": false,
+   "stale": false,
+   "age_sec": 0.06
+  }
+ ]
+}

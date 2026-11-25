@@ -2,3 +2,4 @@
 requests>=2.22.0
 PyYAML>=5.3.1
 colorama>=0.4.3
+pytest>=6.0            # property/sync tests: pytest tests

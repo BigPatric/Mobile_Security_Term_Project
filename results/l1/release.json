@@ -1,0 +1,93 @@
+{
+ "mode": "live",
+ "agent_side": {
+  "supi_token": "token_sub_kdckkneoiojfpglh",
+  "pdu_session_id": 1,
+  "release_result": {
+   "status": "ok",
+   "verified": true,
+   "action": "PDU_SESSION_RELEASED",
+   "supi": "token_sub_kdckkneoiojfpglh",
+   "pdu_session_id": 1,
+   "pre_state": "ACTIVE",
+   "post_state": "RELEASED",
+   "sm_context_ref": "[REDACTED:smref]",
+   "release_api": {
+    "endpoint": "http://127.0.0.2:8000/nsmf-pdusession/v1/sm-contexts/[REDACTED:smref]/release",
+    "http_status": 204,
+    "http_response": "",
+    "oauth": "no NF identity to present (no cert/<type>_<uuid>.pem under /home/patrickwu666/Desktop/Mobile_Security_Term_Project/free5gc/cert)"
+   },
+   "confirmed_by": [
+    "core (SMF: SM context released \u2014 UPF N4 / PCF / UDM torn down)"
+   ],
+   "post_probe": {
+    "smf_status": [
+     404
+    ],
+    "amf_status": [
+     200
+    ],
+    "smf_released": true,
+    "amf_released": false,
+    "tunnel_removed": false
+   },
+   "ue_notified": false,
+   "note": "Core released the session (UPF N4 / PCF / UDM torn down), but the UE was NOT signalled (a direct SMF release bypasses the AMF's UE notification). The UE's uesimtun tunnel lingers locally while its data path is dead \u2014 connectivity is broken at the network.",
+   "timestamp": "2026-11-25T12:49:45Z",
+   "dataplane_before": {
+    "checked": true,
+    "up": false,
+    "iface": "uesimtun6",
+    "detail": "ping via uesimtun6 failed"
+   },
+   "dataplane_after": {
+    "checked": true,
+    "up": false,
+    "iface": "uesimtun6",
+    "detail": "ping via uesimtun6 failed"
+   }
+  },
+  "real_supi_in_agent_result": false
+ },
+ "gateway_side": {
+  "real_supi": "imsi-208930000000003",
+  "sm_context_ref": "urn:uuid:197e88ce-a292-44d0-a59c-3b4998411b9b",
+  "real_supi_in_tool_log": true,
+  "tool_log": [
+   "WARNING [TOOL] trigger_pdu_session_release(imsi-208930000000003, psi=1) \u2014 HIGH-RISK",
+   "INFO [TOOL] NRF access token acquired=False (no NF identity to present (no cert/<type>_<uuid>.pem under /home/patrickwu666/Desktop/Mobile_Security_Term_Project/free5gc/cert))",
+   "INFO [TOOL] SMF ReleaseSMContext http://127.0.0.2:8000/nsmf-pdusession/v1/sm-contexts/urn:uuid:197e88ce-a292-44d0-a59c-3b4998411b9b/release -> HTTP 204"
+  ]
+ },
+ "core_truth": {
+  "pre": {
+   "amf_session_active": true,
+   "smf_context_gone": false,
+   "data_plane": {
+    "checked": true,
+    "up": false,
+    "iface": "uesimtun6",
+    "detail": "ping via uesimtun6 failed"
+   }
+  },
+  "post": {
+   "amf_session_gone": false,
+   "smf_context_gone": true,
+   "data_plane": {
+    "checked": true,
+    "up": false,
+    "iface": "uesimtun6",
+    "detail": "ping via uesimtun6 failed"
+   }
+  },
+  "release_api": {
+   "endpoint": "http://127.0.0.2:8000/nsmf-pdusession/v1/sm-contexts/[REDACTED:smref]/release",
+   "http_status": 204,
+   "http_response": "",
+   "oauth": "no NF identity to present (no cert/<type>_<uuid>.pem under /home/patrickwu666/Desktop/Mobile_Security_Term_Project/free5gc/cert)"
+  },
+  "verified": true,
+  "status": "ok"
+ }
+}

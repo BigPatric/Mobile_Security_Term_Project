@@ -16,21 +16,28 @@ Design and limits: [docs/L1_DESIGN.md](docs/L1_DESIGN.md) · Numbers: [docs/L1_R
 ## Run
 
 ```bash
-pip install -r requirements.txt pytest
+pip install -r requirements.txt
 pytest tests                          # offline
 python3 run_l1.py --sim 1000          # see what the agent sees
+python3 run_l1.py --sim 20 --proof    # real identity vs what the agent gets, side by side
 python3 experiments/l1_scale.py       # all tables, ~1 min
 python3 run_l1.py                     # live free5GC (below)
 ```
 
-Live testbed (Linux; free5GC v4.1.0 + UERANSIM v3.2.7, `nrfcfg oauth: false`), one terminal each:
+Live testbed (Linux; free5GC v4.1.0 + UERANSIM v3.2.7, `nrfcfg oauth: false`), one terminal each,
+in order — core, then gNB, then UEs (let them attach), then WebConsole, then the gateway:
 
 ```bash
 cd free5gc  && sudo ./run.sh
 cd UERANSIM && sudo ./build/nr-gnb -c config/free5gc-gnb.yaml
 cd UERANSIM && sudo ./build/nr-ue  -c config/free5gc-ue.yaml -n 9 -t 2000
 cd free5gc/webconsole && ./bin/webconsole -c ../config/webuicfg.yaml
+python3 -u run_l1.py --serve          # gateway terminal: live status + [TOOL] logs (real SUPI on release)
 ```
+
+`run_l1.py --proof` shows a UE's real identity next to the agent's token view; `--serve` streams the
+gateway's state; `--out results/l1/live.json` records per-cycle evidence. The real SUPI appears only in
+the gateway terminal's `[TOOL]` log and free5GC's own logs, never in any agent-facing result.
 
 The WebConsole appends NF profiles on every request and slows down over time: restart it with the core.
 That leak is another reason to poll in bulk.

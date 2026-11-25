@@ -1,0 +1,45 @@
+========================================================================
+INSIDE THE GATEWAY — real identity (never leaves the gateway):
+
+{
+ "supi": "imsi-208930000000003",
+ "tac (location)": "000001",
+ "sessions": [
+  {
+   "id": 1,
+   "dnn": "internet",
+   "slice": "1-010203",
+   "sm_context_ref": "urn:uuid:197e88ce-a292-44d0-a59c-3b4998411b9b"
+  }
+ ]
+}
+
+WHAT THE AGENT SEES — get_ue(supi_token):
+
+{
+ "status": "ok",
+ "cursor": "c498780.1",
+ "age_sec": 0.42,
+ "stale": false,
+ "registered": true,
+ "ue": {
+  "supi_token": "token_sub_bikglebnkoholjfg",
+  "cm_state": "CONNECTED",
+  "sessions": [
+   {
+    "id": 1,
+    "dnn": "internet",
+    "slice": "1-010203",
+    "etag": "jgofgdpfmkie"
+   }
+  ]
+ }
+}
+
+------------------------------------------------------------------------
+SUPI                              'imsi-208930000000003'   ->  token 'token_sub_bikglebnkoholjfg'
+SM-context ref  'urn:uuid:197e88ce-a292-44d0-a59c-3b4998411b9b'   ->  etag  'jgofgdpfmkie'
+TAC (location)                                  '000001'   ->  (absent from the view)
+------------------------------------------------------------------------
+Planted-identifier oracle: untrusted results mask, they do not tokenize (masked != token, so no lookup).
+  get_alert_logs -> {"status": "error", "error": "Log ID '__none__' not found in monitoring system."}
