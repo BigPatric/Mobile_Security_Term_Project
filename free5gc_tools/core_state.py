@@ -120,6 +120,19 @@ def wc_put(path: str, body: Dict) -> requests.Response:
         raise CoreUnavailable(f"WebConsole PUT {path} unreachable: {e}") from e
 
 
+def wc_post(path: str, body: Dict, timeout: int = 60) -> requests.Response:
+    """Raw POST. A bulk subscriber create (userNumber in the path) writes many
+    Mongo documents in one call, so the timeout is generous."""
+    fg = _fg()
+    headers = _wc_headers()
+    headers["Content-Type"] = "application/json"
+    try:
+        return requests.post(f"{fg['webconsole_url']}{path}", headers=headers,
+                             json=body, timeout=timeout)
+    except requests.exceptions.RequestException as e:
+        raise CoreUnavailable(f"WebConsole POST {path} unreachable: {e}") from e
+
+
 # ===========================================================================
 # 1b. SMF service-based interface (Nsmf_PDUSession) — network-initiated release
 # ===========================================================================
