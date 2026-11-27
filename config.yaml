@@ -4,6 +4,7 @@ free5gc:
   plmn_id: "20893"
   username: "admin"
   password: "free5gc"
+  http_timeout_sec: 60       # WebConsole read timeout; raise for 500+ UEs (bulk GET is large/slow)
 
 smf:                       # Nsmf_PDUSession SBI, for the release call
   sbi_url: "http://127.0.0.2:8000"

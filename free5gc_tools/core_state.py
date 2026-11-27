@@ -64,6 +64,15 @@ def norm_supi(supi: str) -> str:
     return supi if supi.startswith("imsi-") else f"imsi-{supi}"
 
 
+def _http_timeout(default: float = 5.0) -> float:
+    """WebConsole read timeout. At 1000 UEs the registered-ue-context response is
+    large and the WebConsole is slow, so this is configurable (free5gc.http_timeout_sec)."""
+    try:
+        return float(_fg().get("http_timeout_sec", default))
+    except (TypeError, ValueError):
+        return default
+
+
 # ===========================================================================
 # 1. free5GC WebConsole REST client (real, auth'd)
 # ===========================================================================
@@ -105,7 +114,8 @@ def wc_get(path: str) -> requests.Response:
     """Raw GET. Returns the Response so callers can distinguish 404 from errors."""
     fg = _fg()
     try:
-        return requests.get(f"{fg['webconsole_url']}{path}", headers=_wc_headers(), timeout=5)
+        return requests.get(f"{fg['webconsole_url']}{path}", headers=_wc_headers(),
+                            timeout=_http_timeout())
     except requests.exceptions.RequestException as e:
         raise CoreUnavailable(f"WebConsole GET {path} unreachable: {e}") from e
 

@@ -78,6 +78,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cycles", type=int, default=5)
+    ap.add_argument("--interval", type=float, default=None,
+                    help="override l1.sync.interval_sec (raise for big N so a slow poll fits a cycle)")
+    ap.add_argument("--max-age", type=float, default=None,
+                    help="override l1.sync.max_age_sec (raise so a slow bulk GET is not flagged stale)")
     ap.add_argument("--out", default=os.path.join(ROOT, "results", "l1", "live_scale.json"))
     a = ap.parse_args()
 
@@ -88,7 +92,12 @@ def main() -> None:
     secret = load_master_secret()
     scope = os.urandom(8).hex()
 
-    sync = SyncEngine(Free5GCSource(), **l1["sync"])
+    sync_cfg = dict(l1["sync"])
+    if a.interval is not None:
+        sync_cfg["interval_sec"] = a.interval
+    if a.max_age is not None:
+        sync_cfg["max_age_sec"] = a.max_age
+    sync = SyncEngine(Free5GCSource(), **sync_cfg)
     if not sync.step():
         raise SystemExit(f"cannot read the live core: {sync.last_error}")
     gw = build_l1_gateway(default_local_client(), sync, l1, secret, scope=scope)

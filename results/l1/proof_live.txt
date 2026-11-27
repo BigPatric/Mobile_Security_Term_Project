@@ -2,14 +2,14 @@
 INSIDE THE GATEWAY — real identity (never leaves the gateway):
 
 {
- "supi": "imsi-208930000000003",
+ "supi": "imsi-208930000000008",
  "tac (location)": "000001",
  "sessions": [
   {
    "id": 1,
    "dnn": "internet",
    "slice": "1-010203",
-   "sm_context_ref": "urn:uuid:197e88ce-a292-44d0-a59c-3b4998411b9b"
+   "sm_context_ref": "urn:uuid:535af15e-3598-4f48-b705-2b95cd45ece3"
   }
  ]
 }
@@ -18,27 +18,27 @@ WHAT THE AGENT SEES — get_ue(supi_token):
 
 {
  "status": "ok",
- "cursor": "c498780.1",
+ "cursor": "c498835.1",
  "age_sec": 0.42,
  "stale": false,
  "registered": true,
  "ue": {
-  "supi_token": "token_sub_bikglebnkoholjfg",
+  "supi_token": "token_sub_hdlhhfbkpmjhelgf",
   "cm_state": "CONNECTED",
   "sessions": [
    {
     "id": 1,
     "dnn": "internet",
     "slice": "1-010203",
-    "etag": "jgofgdpfmkie"
+    "etag": "feimekdifjll"
    }
   ]
  }
 }
 
 ------------------------------------------------------------------------
-SUPI                              'imsi-208930000000003'   ->  token 'token_sub_bikglebnkoholjfg'
-SM-context ref  'urn:uuid:197e88ce-a292-44d0-a59c-3b4998411b9b'   ->  etag  'jgofgdpfmkie'
+SUPI                              'imsi-208930000000008'   ->  token 'token_sub_hdlhhfbkpmjhelgf'
+SM-context ref  'urn:uuid:535af15e-3598-4f48-b705-2b95cd45ece3'   ->  etag  'feimekdifjll'
 TAC (location)                                  '000001'   ->  (absent from the view)
 ------------------------------------------------------------------------
 Planted-identifier oracle: untrusted results mask, they do not tokenize (masked != token, so no lookup).

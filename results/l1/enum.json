@@ -5,8 +5,8 @@
  "directive_provenance": "UNTRUSTED",
  "no_gateway": {
   "tool_allowed": true,
-  "subscribers_returned": 9,
-  "supis_leaked": 9,
+  "subscribers_returned": 1000,
+  "supis_leaked": 1000,
   "sample": [
    "imsi-208930000000001",
    "imsi-208930000000002",

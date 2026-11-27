@@ -44,12 +44,34 @@ def load_cfg():
     return cfg
 
 
-def count_subscribers() -> int:
+def _supi_int(supi: str) -> int:
+    """Digits of an 'imsi-<15 digits>' id as an int."""
+    return int(cs.norm_supi(str(supi))[len("imsi-"):])
+
+
+def list_subscribers() -> list:
     resp = cs.wc_get("/api/subscriber")
     if not resp.ok:
         raise SystemExit(f"GET /api/subscriber -> HTTP {resp.status_code}")
     data = resp.json()
-    return len(data) if isinstance(data, list) else 0
+    return data if isinstance(data, list) else []
+
+
+def count_subscribers() -> int:
+    return len(list_subscribers())
+
+
+def max_existing_imsi() -> int:
+    """Highest IMSI currently provisioned, 0 if none."""
+    vals = []
+    for s in list_subscribers():
+        ueid = s.get("ueId") if isinstance(s, dict) else None
+        if ueid:
+            try:
+                vals.append(_supi_int(ueid))
+            except ValueError:
+                pass
+    return max(vals) if vals else 0
 
 
 def main() -> None:
@@ -58,6 +80,12 @@ def main() -> None:
     ap.add_argument("n", type=int, nargs="?", help="number of subscribers to create")
     ap.add_argument("--from", dest="template", default="imsi-208930000000001",
                     help="existing subscriber to copy (default: the UERANSIM default IMSI)")
+    ap.add_argument("--start", type=int, default=None,
+                    help="first IMSI to create (digits or full imsi-...). "
+                         "Default: one past the highest IMSI that already exists.")
+    ap.add_argument("--keep-gpsi", action="store_true",
+                    help="keep the template's msisdn (this endpoint reuses one gpsi for all N, "
+                         "so it collides unless blanked). Default blanks it.")
     ap.add_argument("--check", action="store_true", help="only report the current count")
     a = ap.parse_args()
 
@@ -79,7 +107,18 @@ def _run(a, plmn: str) -> None:
 
     template = cs.norm_supi(a.template)
     before = count_subscribers()
-    print(f"template subscriber: {template} (plmn {plmn}); {before} subscriber(s) exist now")
+
+    # The bulk endpoint numbers from the path ueId upward, so starting at an IMSI
+    # that already exists is an immediate 409. Start one past the highest existing.
+    if a.start is not None:
+        # a full 15-digit IMSI, else a small offset added to the template base
+        start = a.start if a.start >= 10 ** 14 else _supi_int(template) + a.start
+    else:
+        start = max_existing_imsi() + 1
+    start_imsi = f"imsi-{start:015d}"
+    end_imsi = f"imsi-{start + a.n - 1:015d}"
+    print(f"template: {template} (plmn {plmn}); {before} subscriber(s) exist now")
+    print(f"creating {a.n}: {start_imsi} .. {end_imsi}")
 
     resp = cs.wc_get(f"/api/subscriber/{template}/{plmn}")
     if not resp.ok:
@@ -87,18 +126,25 @@ def _run(a, plmn: str) -> None:
                          f"Provision at least one subscriber in the WebConsole first.")
     body = resp.json()
 
+    # This endpoint reuses ONE gpsi string for all N, so the template's msisdn would
+    # collide with its owner. Blank it (SUPI-based attach needs no msisdn) unless asked.
+    if not a.keep_gpsi:
+        amd = body.get("AccessAndMobilitySubscriptionData")
+        if isinstance(amd, dict) and isinstance(amd.get("gpsis"), list) and amd["gpsis"]:
+            amd["gpsis"] = [""]          # keep length >= 1; handler indexes gpsis[0]
+
     t0 = time.perf_counter()
-    resp = cs.wc_post(f"/api/subscriber/{template}/{plmn}/{a.n}", body,
+    resp = cs.wc_post(f"/api/subscriber/{start_imsi}/{plmn}/{a.n}", body,
                       timeout=max(60, a.n // 5))
     dt = time.perf_counter() - t0
     if not resp.ok:
         raise SystemExit(f"bulk create failed: HTTP {resp.status_code} {resp.text[:300]}")
 
     after = count_subscribers()
-    print(f"POST .../{a.n} -> HTTP {resp.status_code} in {dt:.1f}s; "
+    print(f"POST .../{start_imsi}/{plmn}/{a.n} -> HTTP {resp.status_code} in {dt:.1f}s; "
           f"subscribers now: {after} (+{after - before})")
-    print("Next: cd UERANSIM && sudo ./build/nr-ue -c config/free5gc-ue.yaml "
-          f"-n {a.n} -t 2000   (let them register, then run the gateway)")
+    print(f"Next: cd UERANSIM && sudo ./build/nr-ue -c config/free5gc-ue.yaml "
+          f"-n {a.n} -t 2000   (its IMSI base must match {start_imsi})")
 
 
 if __name__ == "__main__":
